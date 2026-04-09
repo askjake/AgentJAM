@@ -1,0 +1,26 @@
+{
+  "default_model": "sonnet",
+  "reasoning_model": "opus",
+  "fast_model": "haiku",
+  "max_tokens": 8192,
+  "reasoning_max_tokens": 128000,
+  "auto_routing": true,
+  "complexity_threshold": 0.7,
+  "model_arns": {
+    "opus": "arn:aws:bedrock:us-west-2:233532778289:inference-profile/us.anthropic.claude-opus-4-6-v1",
+    "sonnet": "arn:aws:bedrock:us-west-2:233532778289:inference-profile/us.anthropic.claude-sonnet-4-6",
+    "haiku": "arn:aws:bedrock:us-west-2:233532778289:inference-profile/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+  },
+  "model_ids": {
+    "opus": "anthropic.claude-opus-4-6-v1",
+    "sonnet": "anthropic.claude-sonnet-4-6",
+    "haiku": "anthropic.claude-haiku-4-5-20251001-v1:0"
+  },
+  "coverity_assist": {
+    "url": "https://coverity-assist-stg.dishtv.technology/chat",
+    "staging_url": "https://coverity-assist-stg.dishtv.technology/chat",
+    "production_url": "http://coverity-assist.dishtv.technology/chat",
+    "health_endpoint": "/health",
+    "timeout": 900
+  }
+}
