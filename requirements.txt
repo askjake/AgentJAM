@@ -1,0 +1,14 @@
+# AgentJAM Dependencies
+
+# Core
+requests>=2.31.0
+python-dotenv>=1.0.0
+
+# CLI
+argparse>=1.4.0
+
+# Optional: Development
+pytest>=7.4.0
+flake8>=6.1.0
+mypy>=1.5.0
+black>=23.9.0
