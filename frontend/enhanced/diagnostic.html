@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Frontend Diagnostic</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        .test { margin: 20px 0; padding: 15px; border: 1px solid #ccc; border-radius: 5px; }
+        .pass { background: #d4edda; border-color: #c3e6cb; }
+        .fail { background: #f8d7da; border-color: #f5c6cb; }
+        button { padding: 10px 20px; margin: 5px; cursor: pointer; }
+        #log { background: #f8f9fa; padding: 10px; border: 1px solid #dee2e6; max-height: 300px; overflow-y: auto; font-family: monospace; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <h1>🔧 Enhanced Frontend Diagnostic</h1>
+    
+    <div class="test">
+        <h2>1. JavaScript Load Test</h2>
+        <div id="js-test">Testing...</div>
+    </div>
+    
+    <div class="test">
+        <h2>2. API Connection Test</h2>
+        <div id="api-test">Testing...</div>
+    </div>
+    
+    <div class="test">
+        <h2>3. Navigation Test</h2>
+        <button onclick="testNav('overview')">Overview</button>
+        <button onclick="testNav('chat')">Chat</button>
+        <button onclick="testNav('tools')">Tools</button>
+        <div id="nav-test">Click buttons above...</div>
+    </div>
+    
+    <div class="test">
+        <h2>4. DOM Element Check</h2>
+        <div id="dom-test">Checking...</div>
+    </div>
+    
+    <h2>Debug Log:</h2>
+    <div id="log"></div>
+    
+    <script>
+        const log = (msg) => {
+            const logDiv = document.getElementById('log');
+            const time = new Date().toLocaleTimeString();
+            logDiv.innerHTML += `[${time}] ${msg}<br>`;
+            console.log(msg);
+        };
+        
+        // Test 1: JavaScript
+        document.getElementById('js-test').innerHTML = '✅ JavaScript is working!';
+        document.getElementById('js-test').parentElement.classList.add('pass');
+        log('✅ JavaScript loaded and executing');
+        
+        // Test 2: API Connection
+        const apiUrl = window.location.protocol + '//' + (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1' ? window.location.hostname : '10.73.184.61') + ':8000';
+        log(`Testing API at: ${apiUrl}`);
+        
+        fetch(`${apiUrl}/health`)
+            .then(r => r.json())
+            .then(data => {
+                document.getElementById('api-test').innerHTML = `✅ Backend connected! Status: ${data.status}`;
+                document.getElementById('api-test').parentElement.classList.add('pass');
+                log(`✅ Backend health check passed: ${JSON.stringify(data)}`);
+            })
+            .catch(err => {
+                document.getElementById('api-test').innerHTML = `❌ Backend connection failed: ${err.message}`;
+                document.getElementById('api-test').parentElement.classList.add('fail');
+                log(`❌ Backend connection error: ${err}`);
+            });
+        
+        // Test 3: Navigation
+        function testNav(view) {
+            log(`Testing navigation to: ${view}`);
+            document.getElementById('nav-test').innerHTML = `Navigated to: <strong>${view}</strong>`;
+            log(`✅ Navigation test to ${view} successful`);
+        }
+        
+        // Test 4: DOM Elements
+        const checkElements = [
+            { id: 'overview-view', expected: true },
+            { id: 'chat-view', expected: true },
+            { id: 'tools-view', expected: true },
+            { selector: '.nav-btn', expected: 6 }
+        ];
+        
+        let domResults = '';
+        let domPass = true;
+        
+        checkElements.forEach(check => {
+            if (check.id) {
+                const el = document.getElementById(check.id);
+                const exists = !!el;
+                domResults += `${exists ? '✅' : '❌'} #${check.id}: ${exists ? 'Found' : 'Missing'}<br>`;
+                if (!exists) domPass = false;
+                log(`${exists ? '✅' : '❌'} Element #${check.id}: ${exists ? 'found' : 'NOT FOUND'}`);
+            } else if (check.selector) {
+                const els = document.querySelectorAll(check.selector);
+                const count = els.length;
+                const match = count === check.expected;
+                domResults += `${match ? '✅' : '❌'} ${check.selector}: Found ${count}, expected ${check.expected}<br>`;
+                if (!match) domPass = false;
+                log(`${match ? '✅' : '❌'} Selector ${check.selector}: found ${count}, expected ${check.expected}`);
+            }
+        });
+        
+        // This will run after the page loads, but we're checking the enhanced page elements
+        // which don't exist on this diagnostic page, so it will fail - that's expected
+        document.getElementById('dom-test').innerHTML = domResults || 'No elements checked on diagnostic page (this is normal)';
+        document.getElementById('dom-test').parentElement.classList.add(domPass ? 'pass' : 'fail');
+        
+        log('✅ Diagnostic page fully loaded');
+    </script>
+</body>
+</html>

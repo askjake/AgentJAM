@@ -1,0 +1,208 @@
+import axiosLibs from '@shared/ui/libs/axios.libs';
+import { BACKEND_URL } from '@shared/ui/constants/env.constants';
+import {
+  ChangeMessageVersionSchema,
+  changeMessageVersionValidator,
+  CreateMessageVersionSchema,
+  createMessageVersionValidator,
+  UpdateMessageSchema,
+  updateMessageValidator,
+} from '@shared/ui/validators/messages.validators';
+
+import {
+  MessageVersionsInfoType,
+  MessageVersionsType,
+  OriginalMessageType,
+  RawMessageType,
+} from '@shared/ui/types/messages.types';
+import {
+  PaginationProps,
+  PaginationType,
+} from '@shared/ui/types/pagination.types';
+import { CHAT_MESSAGES_PAGE_SIZE } from '@shared/ui/constants/common.constants';
+import { AxiosIncomingClientHeaders } from '@shared/ui/types/axios.types';
+import { pickKeys } from '@shared/ui/utils/common.utils';
+
+// Timeout wrapper for fetch with AbortController
+const fetchWithTimeout = async (
+  url: string,
+  options: RequestInit = {},
+  timeoutMs: number = 12000
+): Promise<Response> => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    return response;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    if ((error as Error).name === 'AbortError') {
+      throw new Error(`Request timeout after ${timeoutMs}ms`);
+    }
+    throw error;
+  }
+};
+
+export const createMessage = async ({
+  chat_id,
+  content = '',
+  message_config,
+  attachments = [],
+}: { chat_id: string } & UpdateMessageSchema): Promise<
+  ReadableStream<Uint8Array<ArrayBufferLike>>
+> => {
+  await updateMessageValidator.parseAsync({
+    content,
+    attachments,
+    message_config,
+  });
+
+  // Use native fetch for SSE streaming with 12 second timeout
+  const response = await fetchWithTimeout(
+    `${BACKEND_URL}/chats/${chat_id}/messages`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Auth-Request-Email': 'test.test@dish.com',
+      },
+      credentials: 'include',
+      body: JSON.stringify({
+        content,
+        attachments,
+        message_config,
+      }),
+    },
+    12000
+  );
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+  }
+
+  if (!response.body) {
+    throw new Error('No response body for streaming');
+  }
+
+  return response.body;
+};
+
+export const getMessage = async ({
+  chat_id,
+  message_id,
+}: {
+  chat_id: string;
+  message_id: string;
+}): Promise<RawMessageType> => {
+  const { data } = await axiosLibs.get(
+    `/chats/${chat_id}/messages/${message_id}`,
+  );
+  return data;
+};
+
+export const getMessages = async ({
+  chat_id,
+  page = 1,
+  limit = CHAT_MESSAGES_PAGE_SIZE,
+  incomingHeaders,
+}: {
+  chat_id: string;
+} & PaginationProps &
+  AxiosIncomingClientHeaders): Promise<PaginationType<OriginalMessageType>> => {
+  const { data } = await axiosLibs.get(`/chats/${chat_id}/messages`, {
+    params: {
+      page,
+      limit,
+    },
+    ...(incomingHeaders && {
+      headers: {
+        ...pickKeys({
+          obj: incomingHeaders,
+          keysToPick: ['x-auth-request-email', 'cookie'],
+        }),
+      },
+    }),
+  });
+  return data;
+};
+
+export const getMessageVersion = async ({
+  chat_id,
+  message_id,
+}: {
+  chat_id: string;
+  message_id: string;
+}): Promise<MessageVersionsType> => {
+  const { data } = await axiosLibs.get(
+    `/chats/${chat_id}/messages/${message_id}/version`,
+  );
+  return data;
+};
+
+export const createMessageVersion = async ({
+  chat_id,
+  message_id,
+  content = '',
+}: {
+  chat_id: string;
+  message_id: string;
+} & CreateMessageVersionSchema): Promise<
+  ReadableStream<Uint8Array<ArrayBufferLike>>
+> => {
+  await createMessageVersionValidator.parseAsync({
+    content,
+  });
+
+  // Use native fetch for SSE streaming with 12 second timeout
+  const response = await fetchWithTimeout(
+    `${BACKEND_URL}/chats/${chat_id}/messages/${message_id}/versions`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Auth-Request-Email': 'test.test@dish.com',
+      },
+      credentials: 'include',
+      body: JSON.stringify({
+        content,
+      }),
+    },
+    12000
+  );
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+  }
+
+  if (!response.body) {
+    throw new Error('No response body for streaming');
+  }
+
+  return response.body;
+};
+
+export const changeMessageVersion = async ({
+  chat_id,
+  message_id,
+  version_index,
+}: {
+  chat_id: string;
+  message_id: string;
+} & ChangeMessageVersionSchema): Promise<MessageVersionsInfoType> => {
+  await changeMessageVersionValidator.parseAsync({
+    version_index,
+  });
+
+  const { data } = await axiosLibs.put(
+    `/chats/${chat_id}/messages/${message_id}/versions`,
+    {
+      version_index,
+    },
+  );
+  return data;
+};

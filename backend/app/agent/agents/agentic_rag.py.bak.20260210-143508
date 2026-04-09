@@ -1,0 +1,140 @@
+from typing import Annotated, Any
+from typing_extensions import TypedDict
+from functools import cache
+import logging
+
+from langchain_core.messages import BaseMessage, SystemMessage
+from langgraph.graph.message import add_messages
+from langgraph.graph import END, StateGraph, START
+
+from app.core.llm import get_model
+from app.config import get_settings
+from app.core.utils import get_datestr_now
+
+from ..db_utils import get_checkpointer
+from ..utils import aggressive_cachept, cleanup_cachept, set_model_config
+from ..compression import compress_if_needed
+from ..methodology_utils import inject_methodology_into_prompt
+from .utils import get_prompt
+
+settings = get_settings()
+logger = logging.getLogger(__name__)
+
+# Base system prompt (will be personalized per user)
+base_system_prompt_content = get_prompt("chat_system").format(today=get_datestr_now())
+
+
+class AgentState(TypedDict):
+    messages: Annotated[list[BaseMessage], add_messages]
+    model_config: dict[str, Any]
+
+
+### Nodes
+async def generate_response(state: AgentState, config=None):
+    """Generate the response from the current message history
+
+    Applies conversation compression and cachepoint optimization
+    """
+    messages = state["messages"]
+    
+    # Get chat_id from config for compression
+    chat_id = None
+    user_email = None
+    if config and "configurable" in config:
+        thread_id = config["configurable"].get("thread_id")
+        user_email = config["configurable"].get("user_email")
+        if thread_id:
+            from uuid import UUID
+            try:
+                chat_id = UUID(thread_id)
+            except:
+                pass
+    
+    # Apply conversation compression to reduce token usage
+    compressed_messages, token_savings = await compress_if_needed(
+        messages,
+        chat_id=chat_id,
+        max_messages=20,  # Keep last 20 messages uncompressed
+        compression_threshold=15  # Compress after 15 messages
+    )
+    
+    if token_savings:
+        logger.info(
+            f"Conversation compressed: saved ~{token_savings['saved_tokens']} tokens "
+            f"({token_savings['reduction_percent']:.1f}% reduction)"
+        )
+    
+    # Apply cachepoint optimization
+    cleanup_cachept(compressed_messages)
+    compressed_messages = aggressive_cachept(compressed_messages, settings.MAX_CACHEPOINT_CNT)
+    
+    # Get personalized system prompt if user_email is available
+    system_prompt_content = base_system_prompt_content
+    
+    if user_email:
+        try:
+            # Import here to avoid circular dependencies
+            from app.db import get_db_session_ctxmgr
+            from app.prompt_evolution.service import PromptEvolutionService
+            
+            # Get personalized prompt
+            async with get_db_session_ctxmgr() as db:
+                evolution_service = PromptEvolutionService()
+                personalized_response = await evolution_service.get_personalized_prompt(
+                    db=db,
+                    base_prompt=base_system_prompt_content,
+                    user_email=user_email,
+                )
+                
+                # Use personalized prompt if confidence is high enough
+                if personalized_response.profile_confidence >= 0.3:
+                    system_prompt_content = personalized_response.personalized_prompt
+                    logger.debug(
+                        f"Using personalized prompt for {user_email} "
+                        f"(confidence: {personalized_response.profile_confidence:.2f})"
+                    )
+        except Exception as e:
+            # If personalization fails, fall back to base prompt
+            logger.warning(f"Failed to get personalized prompt: {e}")
+    
+    
+    # Apply methodology enhancement if triggered by user message
+    if messages:
+        # Get the last user message
+        last_user_msg = None
+        for msg in reversed(messages):
+            if hasattr(msg, 'type') and msg.type == 'human':
+                last_user_msg = msg.content
+                break
+            elif not hasattr(msg, 'type') and isinstance(msg, dict) and msg.get('role') == 'user':
+                last_user_msg = msg.get('content', '')
+                break
+        
+        if last_user_msg:
+            system_prompt_content = inject_methodology_into_prompt(
+                system_prompt_content, 
+                last_user_msg
+            )
+    
+    system_prompt = SystemMessage(content=system_prompt_content)
+    
+    model = get_model()
+    set_model_config(model, state["model_config"])
+    response = await model.ainvoke([system_prompt, *compressed_messages], config=config)
+
+    # Cleanup the cachepoints so cachepoints are not stored persistently
+    cleanup_cachept(compressed_messages)
+
+    return {"messages": [response]}
+
+
+### Graph
+@cache
+def get_graph():
+    workflow = StateGraph(AgentState)
+
+    workflow.add_node("agent", generate_response)
+    workflow.add_edge(START, "agent")
+    workflow.add_edge("agent", END)
+
+    return workflow.compile(checkpointer=get_checkpointer())

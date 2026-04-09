@@ -1,0 +1,283 @@
+"""
+Prompt Evolution Models
+
+This module defines the database models for tracking and evolving system prompts
+based on user interactions and preferences.
+"""
+import uuid
+from datetime import datetime
+from sqlalchemy import (
+    ForeignKey,
+    func,
+    Index,
+    UUID as SQLAlchemyUUID,
+    Text,
+    Float,
+    Integer,
+    Boolean,
+)
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import Mapped, mapped_column
+from app.db import Base
+from app.db.mixin import TimestampMixin, LowerCaseEmailMixin
+
+
+class PromptVersion(Base, TimestampMixin):
+    """
+    Tracks different versions of system prompts.
+    """
+    __tablename__ = "prompt_version"
+    
+    version_id: Mapped[uuid.UUID] = mapped_column(
+        primary_key=True,
+        default=uuid.uuid4,
+        comment="Unique identifier for the prompt version",
+    )
+    version_name: Mapped[str] = mapped_column(
+        comment="Human-readable name for this version",
+    )
+    prompt_content: Mapped[str] = mapped_column(
+        Text,
+        comment="The actual prompt content",
+    )
+    prompt_type: Mapped[str] = mapped_column(
+        default="system",
+        comment="Type of prompt: system, user_overlay, tool_instruction, etc.",
+    )
+    is_active: Mapped[bool] = mapped_column(
+        default=True,
+        comment="Whether this version is currently active",
+    )
+    parent_version_id: Mapped[uuid.UUID] = mapped_column(
+        SQLAlchemyUUID(as_uuid=True),
+        ForeignKey("prompt_version.version_id", ondelete="SET NULL"),
+        nullable=True,
+        comment="Parent version this was derived from",
+    )
+    metadata: Mapped[dict] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment="Additional metadata about this version",
+    )
+    
+    __table_args__ = (
+        Index("idx_prompt_version_active", "is_active", "prompt_type"),
+        Index("idx_prompt_version_created", "created_at"),
+    )
+
+
+class UserPromptProfile(Base, TimestampMixin, LowerCaseEmailMixin):
+    """
+    Stores personalized prompt overlays and preferences for each user.
+    """
+    __tablename__ = "user_prompt_profile"
+    
+    profile_id: Mapped[uuid.UUID] = mapped_column(
+        primary_key=True,
+        default=uuid.uuid4,
+        comment="Unique identifier for the user profile",
+    )
+    owner_id: Mapped[str] = mapped_column(
+        comment="Owner email",
+        index=True,
+    )
+    prompt_overlay: Mapped[dict] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment="Personalized prompt overlay sections",
+    )
+    preferences: Mapped[dict] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment="User preferences and communication style",
+    )
+    suppressed_sections: Mapped[list] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment="List of system prompt sections to suppress",
+    )
+    enhanced_sections: Mapped[dict] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment="Sections to enhance with user-specific content",
+    )
+    confidence_score: Mapped[float] = mapped_column(
+        Float,
+        default=0.0,
+        comment="Confidence in the profile accuracy (0-1)",
+    )
+    interaction_count: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        comment="Number of interactions used to build this profile",
+    )
+    last_analyzed_at: Mapped[datetime] = mapped_column(
+        nullable=True,
+        comment="Last time the profile was analyzed and updated",
+    )
+    
+    __table_args__ = (
+        Index("idx_user_prompt_profile_owner", "owner_id"),
+    )
+
+
+class ConversationAnalysis(Base, TimestampMixin, LowerCaseEmailMixin):
+    """
+    Stores analysis of individual conversations for prompt evolution.
+    """
+    __tablename__ = "conversation_analysis"
+    
+    analysis_id: Mapped[uuid.UUID] = mapped_column(
+        primary_key=True,
+        default=uuid.uuid4,
+        comment="Unique identifier for the analysis",
+    )
+    owner_id: Mapped[str] = mapped_column(
+        comment="Owner email",
+    )
+    chat_id: Mapped[uuid.UUID] = mapped_column(
+        SQLAlchemyUUID(as_uuid=True),
+        ForeignKey("chat.chat_id", ondelete="CASCADE"),
+        nullable=False,
+        comment="Foreign key linking to the chat",
+    )
+    message_count: Mapped[int] = mapped_column(
+        Integer,
+        comment="Number of messages in the conversation",
+    )
+    tool_usage: Mapped[dict] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment="Tools used and their frequency",
+    )
+    communication_style: Mapped[dict] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment="Detected communication style metrics",
+    )
+    topics: Mapped[list] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment="Main topics discussed",
+    )
+    sentiment: Mapped[dict] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment="Sentiment analysis results",
+    )
+    effectiveness_score: Mapped[float] = mapped_column(
+        Float,
+        nullable=True,
+        comment="Estimated effectiveness of the interaction (0-1)",
+    )
+    user_satisfaction_indicators: Mapped[dict] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment="Indicators of user satisfaction",
+    )
+    prompt_version_used: Mapped[uuid.UUID] = mapped_column(
+        SQLAlchemyUUID(as_uuid=True),
+        ForeignKey("prompt_version.version_id", ondelete="SET NULL"),
+        nullable=True,
+        comment="Prompt version used in this conversation",
+    )
+    insights: Mapped[dict] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment="Key insights extracted from the conversation",
+    )
+    
+    __table_args__ = (
+        Index("idx_conversation_analysis_owner", "owner_id"),
+        Index("idx_conversation_analysis_chat", "chat_id"),
+        Index("idx_conversation_analysis_created", "created_at"),
+    )
+
+
+class PromptEvolutionMetric(Base, TimestampMixin):
+    """
+    Tracks metrics for prompt versions to measure effectiveness.
+    """
+    __tablename__ = "prompt_evolution_metric"
+    
+    metric_id: Mapped[uuid.UUID] = mapped_column(
+        primary_key=True,
+        default=uuid.uuid4,
+        comment="Unique identifier for the metric",
+    )
+    version_id: Mapped[uuid.UUID] = mapped_column(
+        SQLAlchemyUUID(as_uuid=True),
+        ForeignKey("prompt_version.version_id", ondelete="CASCADE"),
+        nullable=False,
+        comment="Prompt version being measured",
+    )
+    metric_type: Mapped[str] = mapped_column(
+        comment="Type of metric: effectiveness, satisfaction, clarity, etc.",
+    )
+    metric_value: Mapped[float] = mapped_column(
+        Float,
+        comment="Numeric value of the metric",
+    )
+    sample_size: Mapped[int] = mapped_column(
+        Integer,
+        comment="Number of samples used to calculate this metric",
+    )
+    metadata: Mapped[dict] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment="Additional context for the metric",
+    )
+    
+    __table_args__ = (
+        Index("idx_prompt_metric_version", "version_id", "metric_type"),
+        Index("idx_prompt_metric_created", "created_at"),
+    )
+
+
+class PromptInfluenceEdge(Base, TimestampMixin):
+    """
+    Tracks relationships and influence between prompt versions.
+    Represents edges in the influence network graph.
+    """
+    __tablename__ = "prompt_influence_edge"
+    
+    edge_id: Mapped[uuid.UUID] = mapped_column(
+        primary_key=True,
+        default=uuid.uuid4,
+        comment="Unique identifier for the edge",
+    )
+    source_version_id: Mapped[uuid.UUID] = mapped_column(
+        SQLAlchemyUUID(as_uuid=True),
+        ForeignKey("prompt_version.version_id", ondelete="CASCADE"),
+        nullable=False,
+        comment="Source prompt version",
+    )
+    target_version_id: Mapped[uuid.UUID] = mapped_column(
+        SQLAlchemyUUID(as_uuid=True),
+        ForeignKey("prompt_version.version_id", ondelete="CASCADE"),
+        nullable=False,
+        comment="Target prompt version",
+    )
+    influence_type: Mapped[str] = mapped_column(
+        comment="Type of influence: derived_from, improved_by, replaced_by, etc.",
+    )
+    influence_strength: Mapped[float] = mapped_column(
+        Float,
+        comment="Strength of the influence (0-1)",
+    )
+    metadata: Mapped[dict] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment="Additional metadata about the relationship",
+    )
+    
+    __table_args__ = (
+        Index("idx_prompt_influence_source", "source_version_id"),
+        Index("idx_prompt_influence_target", "target_version_id"),
+    )
+
+
+# Indexes for optimization
+Index("idx_conversation_analysis_owner_timestamp", 
+      ConversationAnalysis.owner_id, 
+      ConversationAnalysis.created_at.desc())

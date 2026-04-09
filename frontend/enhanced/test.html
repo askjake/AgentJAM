@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Navigation Test</title>
+    <style>
+        .nav-btn { padding: 10px; margin: 5px; cursor: pointer; }
+        .nav-btn.active { background: #007bff; color: white; }
+        .content-view { display: none; padding: 20px; border: 1px solid #ccc; margin: 20px; }
+        .content-view.active { display: block; }
+    </style>
+</head>
+<body>
+    <h1>Navigation Test</h1>
+    
+    <div id="nav">
+        <button class="nav-btn active" data-view="overview">Overview</button>
+        <button class="nav-btn" data-view="chat">Chat</button>
+        <button class="nav-btn" data-view="tools">Tools</button>
+    </div>
+    
+    <div id="content">
+        <div id="overview-view" class="content-view active">
+            <h2>Overview Content</h2>
+            <p>This is the overview page</p>
+        </div>
+        <div id="chat-view" class="content-view">
+            <h2>Chat Content</h2>
+            <p>This is the chat page</p>
+        </div>
+        <div id="tools-view" class="content-view">
+            <h2>Tools Content</h2>
+            <p>This is the tools page</p>
+        </div>
+    </div>
+    
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            console.log('✅ Test page loaded');
+            initializeNavigation();
+        });
+        
+        function initializeNavigation() {
+            const navButtons = document.querySelectorAll('.nav-btn');
+            
+            navButtons.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const view = btn.getAttribute('data-view');
+                    console.log('Clicked:', view);
+                    switchView(view);
+                    
+                    navButtons.forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                });
+            });
+            console.log('✅ Navigation initialized:', navButtons.length, 'buttons');
+        }
+        
+        function switchView(viewName) {
+            console.log(`Switching to view: ${viewName}`);
+            
+            document.querySelectorAll('.content-view').forEach(view => {
+                view.classList.remove('active');
+            });
+            
+            const targetView = document.getElementById(`${viewName}-view`);
+            if (targetView) {
+                targetView.classList.add('active');
+                console.log('✅ View switched to:', viewName);
+            } else {
+                console.error('❌ View not found:', viewName);
+            }
+        }
+    </script>
+</body>
+</html>

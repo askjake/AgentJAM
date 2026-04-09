@@ -1,0 +1,146 @@
+#!/usr/bin/env python3
+'''
+DishChat Simple Frontend for Raspberry Pi
+'''
+import os
+from flask import Flask, render_template_string, send_from_directory
+
+app = Flask(__name__)
+
+# HTML template
+HTML_TEMPLATE = '''
+<!DOCTYPE html>
+<html>
+<head>
+    <title>DishChat Agent - agentpi003</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        h1 {
+            color: #2d3748;
+            margin-bottom: 10px;
+        }
+        .subtitle {
+            color: #718096;
+            margin-bottom: 30px;
+        }
+        .info-box {
+            background: #f7fafc;
+            border-left: 4px solid #667eea;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 4px;
+        }
+        .status {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 14px;
+            font-weight: 600;
+        }
+        .status.online {
+            background: #c6f6d5;
+            color: #22543d;
+        }
+        .button {
+            display: inline-block;
+            padding: 12px 24px;
+            background: #667eea;
+            color: white;
+            text-decoration: none;
+            border-radius: 6px;
+            margin: 10px 5px;
+            transition: background 0.3s;
+        }
+        .button:hover {
+            background: #5a67d8;
+        }
+        .api-link {
+            color: #667eea;
+            text-decoration: none;
+            font-family: monospace;
+        }
+        .feature-list {
+            list-style: none;
+            padding: 0;
+        }
+        .feature-list li {
+            padding: 8px 0;
+            padding-left: 24px;
+            position: relative;
+        }
+        .feature-list li:before {
+            content: "✓";
+            position: absolute;
+            left: 0;
+            color: #48bb78;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🤖 DishChat Agent</h1>
+        <p class="subtitle">agentpi003@172.16.235.10</p>
+        
+        <div class="info-box">
+            <strong>Status:</strong> <span class="status online">● Online</span>
+        </div>
+        
+        <h2>Backend API</h2>
+        <p>
+            <a href="http://172.16.235.10:8000/health" class="api-link" target="_blank">
+                http://172.16.235.10:8000/health
+            </a>
+        </p>
+        
+        <h2>Features</h2>
+        <ul class="feature-list">
+            <li>FastAPI Backend with Agent Tools</li>
+            <li>PostgreSQL Database</li>
+            <li>Coverity Assist LLM Integration</li>
+            <li>Netra Search Tool</li>
+            <li>DISH Internal Tools</li>
+            <li>Agent Mode with Enhanced Tools</li>
+        </ul>
+        
+        <h2>Quick Links</h2>
+        <a href="http://172.16.235.10:8000/docs" class="button" target="_blank">API Docs</a>
+        <a href="http://172.16.235.10:8000/health" class="button" target="_blank">Health Check</a>
+        
+        <div class="info-box" style="margin-top: 30px;">
+            <strong>Version:</strong> 2.1.0<br>
+            <strong>Device:</strong> Raspberry Pi<br>
+            <strong>Deployment:</strong> April 2, 2026
+        </div>
+    </div>
+</body>
+</html>
+'''
+
+@app.route('/')
+def index():
+    return render_template_string(HTML_TEMPLATE)
+
+@app.route('/health')
+def health():
+    return {'status': 'healthy', 'service': 'frontend', 'device': 'agentpi003'}
+
+if __name__ == '__main__':
+    print("Starting DishChat Frontend on port 3000...")
+    app.run(host='0.0.0.0', port=3000, debug=False)

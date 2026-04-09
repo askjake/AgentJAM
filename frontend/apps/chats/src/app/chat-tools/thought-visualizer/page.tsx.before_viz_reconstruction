@@ -1,0 +1,627 @@
+
+'use client';
+
+import { Card, Typography, Layout, Space, Button, Tabs, Timeline, Tag, Spin, Alert } from 'antd';
+import { BulbOutlined, ToolOutlined, ApiOutlined, ArrowLeftOutlined, SyncOutlined, ThunderboltOutlined, RocketOutlined, ReloadOutlined } from '@ant-design/icons';
+import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import Link from 'next/link';
+
+const { Title, Text, Paragraph } = Typography;
+const { Content } = Layout;
+
+// ==============================================================================
+// TYPE DEFINITIONS
+// ==============================================================================
+
+// ==============================================================================
+// ThoughtNode Interface
+// ==============================================================================
+// Represents a single node in the AI's reasoning chain
+// ==============================================================================
+interface ThoughtNode {
+  id: string;
+  type: 'thought' | 'tool' | 'decision';
+  content: string;
+  timestamp: string;
+}
+
+// ==============================================================================
+// ToolUsage Interface
+// ==============================================================================
+// Records details of tools/functions executed by the AI
+// ==============================================================================
+interface ToolUsage {
+  name: string;
+  input: any;
+  output: any;
+  timestamp: string;
+  duration_ms: number;
+}
+
+// ==============================================================================
+// HELPER FUNCTION: Get API Base URL
+// ==============================================================================
+// Constructs the base API URL with multiple fallback strategies
+// This ensures the visualizer works in different environments:
+//   - Production: Uses environment variable
+//   - Development: Uses current hostname with port 8000
+//   - Fallback: Uses localhost:8000
+// ==============================================================================
+const getApiBaseUrl = (): string => {
+  // Strategy 1: Use environment variable if available
+  if (process.env.NEXT_PUBLIC_API_BASE_URL) {
+    console.log(`📡 Using API base URL from env: ${process.env.NEXT_PUBLIC_API_BASE_URL}`);
+    return process.env.NEXT_PUBLIC_API_BASE_URL;
+  }
+  
+  // Strategy 2: In browser, construct from current location
+  if (typeof window !== 'undefined') {
+    const protocol = window.location.protocol;  // http: or https:
+    const hostname = window.location.hostname;   // IP or domain
+    const apiUrl = `${protocol}//${hostname}:8000`;
+    console.log(`📡 Using API base URL from window.location: ${apiUrl}`);
+    return apiUrl;
+  }
+  
+  // Strategy 3: Fallback for server-side rendering
+  console.log('📡 Using fallback API base URL: http://localhost:8000');
+  return 'http://localhost:8000';
+};
+
+// ==============================================================================
+// MAIN COMPONENT: Thought Visualizer Page
+// ==============================================================================
+export default function ThoughtVisualizerPage() {
+  // ==============================================================================
+  // STATE MANAGEMENT
+  // ==============================================================================
+  const [loading, setLoading] = useState(true);              // Iframe loading state
+  const [activeTab, setActiveTab] = useState('iframe');      // Active tab selection
+  const [thoughts, setThoughts] = useState<ThoughtNode[]>([]);  // Thought chain data
+  const [tools, setTools] = useState<ToolUsage[]>([]);       // Tool execution data
+  const [vizUrl, setVizUrl] = useState<string>('');         // Visualizer iframe URL
+  const [error, setError] = useState<string | null>(null);   // Error state
+  const router = useRouter();
+
+  // ==============================================================================
+  // EFFECT: Initialize Visualizer URL and Mock Data
+  // ==============================================================================
+  // Runs once on component mount to:
+  //   1. Construct proper visualizer URL
+  //   2. Load mock data for demonstration
+  //   3. Set up initial state
+  // ==============================================================================
+  useEffect(() => {
+    console.log('🚀 Initializing Thought Visualizer...');
+    
+    // ==================================================================
+    // Construct Visualizer URL
+    // ==================================================================
+    // The visualizer is served as an iframe from the backend
+    // Endpoint: /rest/api/v1/viz
+    // ==================================================================
+    const apiBaseUrl = getApiBaseUrl();
+    const constructedVizUrl = `${apiBaseUrl}/rest/api/v1/viz`;
+    
+    console.log(`📊 Visualizer URL: ${constructedVizUrl}`);
+    setVizUrl(constructedVizUrl);
+
+    // ==================================================================
+    // Mock Data: Thought Chain
+    // ==================================================================
+    // These represent different steps in the AI's reasoning process
+    // In production, this would come from live data
+    // ==================================================================
+    const mockThoughts: ThoughtNode[] = [
+      {
+        id: '1',
+        type: 'thought',
+        content: 'Analyzing user query to understand intent and context',
+        timestamp: new Date().toISOString(),
+      },
+      {
+        id: '2',
+        type: 'decision',
+        content: 'Determining which tools and knowledge sources to use',
+        timestamp: new Date().toISOString(),
+      },
+      {
+        id: '3',
+        type: 'tool',
+        content: 'Executing internal search for relevant documentation',
+        timestamp: new Date().toISOString(),
+      },
+      {
+        id: '4',
+        type: 'thought',
+        content: 'Synthesizing information from multiple sources',
+        timestamp: new Date().toISOString(),
+      },
+      {
+        id: '5',
+        type: 'decision',
+        content: 'Selecting response format and structure',
+        timestamp: new Date().toISOString(),
+      },
+      {
+        id: '6',
+        type: 'tool',
+        content: 'Formatting response with markdown and code highlighting',
+        timestamp: new Date().toISOString(),
+      }
+    ];
+
+    // ==================================================================
+    // Mock Data: Tool Usage
+    // ==================================================================
+    // Records of tools/functions executed during reasoning
+    // Shows input parameters, output results, and execution time
+    // ==================================================================
+    const mockTools: ToolUsage[] = [
+      {
+        name: 'internal_search',
+        input: { 
+          query: 'LLM configuration best practices', 
+          sources: ['docs', 'wiki'],
+          limit: 10
+        },
+        output: { 
+          results: 5, 
+          relevance: 0.92,
+          top_document: 'llm_config_guide.md'
+        },
+        timestamp: new Date().toISOString(),
+        duration_ms: 234
+      },
+      {
+        name: 'public_web_search',
+        input: { 
+          query: 'Anthropic Claude API documentation',
+          max_results: 10
+        },
+        output: { 
+          results: 10, 
+          top_result: 'docs.anthropic.com/claude',
+          cached: false
+        },
+        timestamp: new Date().toISOString(),
+        duration_ms: 567
+      },
+      {
+        name: 'agent_run_python',
+        input: { 
+          code: 'import requests\nresponse = requests.get(...)',
+          timeout: 30
+        },
+        output: { 
+          success: true, 
+          output: 'Data fetched successfully',
+          exit_code: 0
+        },
+        timestamp: new Date().toISOString(),
+        duration_ms: 1234
+      },
+      {
+        name: 'cluster_inspect',
+        input: {
+          task: 'list all pods',
+          namespace: 'default'
+        },
+        output: {
+          success: true,
+          pods_found: 15,
+          healthy: 14
+        },
+        timestamp: new Date().toISOString(),
+        duration_ms: 456
+      }
+    ];
+
+    setThoughts(mockThoughts);
+    setTools(mockTools);
+    
+    console.log(`✓ Loaded ${mockThoughts.length} thought nodes and ${mockTools.length} tool usages`);
+  }, []);
+
+  // ==============================================================================
+  // HANDLER: Iframe Load Complete
+  // ==============================================================================
+  // Called when the visualizer iframe successfully loads
+  // Hides the loading spinner and displays the iframe
+  // ==============================================================================
+  const handleIframeLoad = () => {
+    console.log('✓ Visualizer iframe loaded successfully');
+    setLoading(false);
+    setError(null);
+
+  // ==============================================================================
+  // EFFECT: Poll for Real Visualization Data
+  // ==============================================================================
+  // Fetches live data from the backend visualization endpoint
+  // Polls every 2 seconds to get updated thoughts, tools, and events
+  // ==============================================================================
+  useEffect(() => {
+    if (!vizUrl) return;
+
+    console.log('🔄 Starting real-time data polling...');
+
+    const fetchRealData = async () => {
+      try {
+        const stateUrl = `${vizUrl}/state`;
+        const response = await fetch(stateUrl);
+        
+        if (!response.ok) {
+          console.error(`Failed to fetch viz state: ${response.status}`);
+          return;
+        }
+
+        const data = await response.json();
+        console.log('📊 Received viz data:', data);
+
+        // Update thoughts from graph nodes
+        if (data.graph && data.graph.nodes) {
+          setThoughts(data.graph.nodes);
+        }
+
+        // Update tools from events
+        if (data.events) {
+          const toolEvents = data.events.filter((e: any) => e.type === 'tool');
+          // Convert to ToolUsage format if needed
+          // For now, we'll just log them
+          console.log('🔧 Tool events:', toolEvents);
+        }
+
+        // Clear error state on successful fetch
+        if (error) {
+          setError(null);
+        }
+
+      } catch (err) {
+        console.error('❌ Error fetching viz data:', err);
+        setError('Failed to fetch visualization data');
+      }
+    };
+
+    // Initial fetch
+    fetchRealData();
+
+    // Set up polling interval (every 2 seconds)
+    const intervalId = setInterval(fetchRealData, 2000);
+
+    // Cleanup
+    return () => {
+      console.log('🛑 Stopping data polling');
+      clearInterval(intervalId);
+    };
+  }, [vizUrl, error]);
+
+  };
+
+  // ==============================================================================
+  // HANDLER: Iframe Load Error
+  // ==============================================================================
+  // Called if the iframe fails to load (network error, 404, etc.)
+  // ==============================================================================
+  const handleIframeError = () => {
+    console.error('❌ Failed to load visualizer iframe');
+    setLoading(false);
+    setError('Failed to load visualizer. Please check if the backend is running.');
+  };
+
+  // ==============================================================================
+  // HANDLER: Retry Loading Visualizer
+  // ==============================================================================
+  // Allows user to retry loading the iframe if it failed
+  // ==============================================================================
+  const handleRetry = () => {
+    console.log('🔄 Retrying visualizer load...');
+    setLoading(true);
+    setError(null);
+    // Force iframe reload by updating URL
+    const apiBaseUrl = getApiBaseUrl();
+    setVizUrl(`${apiBaseUrl}/rest/api/v1/viz?t=${Date.now()}`);
+  };
+
+  // ==============================================================================
+  // HELPER FUNCTIONS: Visual Styling by Node Type
+  // ==============================================================================
+  
+  const getNodeColor = (type: string) => {
+    switch (type) {
+      case 'thought': return '#667eea';      // Purple - for reasoning
+      case 'tool': return '#52c41a';         // Green - for actions
+      case 'decision': return '#faad14';     // Orange - for decisions
+      default: return '#1890ff';             // Blue - default
+    }
+  };
+
+  const getNodeIcon = (type: string) => {
+    switch (type) {
+      case 'thought': return <BulbOutlined />;
+      case 'tool': return <ToolOutlined />;
+      case 'decision': return <ApiOutlined />;
+      default: return <BulbOutlined />;
+    }
+  };
+
+  // ==============================================================================
+  // TAB CONFIGURATION
+  // ==============================================================================
+  // Defines the three main views of the visualizer:
+  //   1. Interactive View: Live iframe with full visualization
+  //   2. Thought Chain: Text-based reasoning progression
+  //   3. Tool Usage: Detailed logs of tool executions
+  // ==============================================================================
+  const tabItems = [
+    {
+      key: 'iframe',
+      label: (
+        <span>
+          <RocketOutlined /> Interactive View
+        </span>
+      ),
+      children: (
+        <div style={{ height: 600, position: 'relative', borderRadius: '12px', overflow: 'hidden' }}>
+          {/* Loading Spinner Overlay */}
+          {loading && !error && (
+            <div style={{
+              position: 'absolute',
+              top: '50%',
+              left: '50%',
+              transform: 'translate(-50%, -50%)',
+              zIndex: 10,
+              textAlign: 'center'
+            }}>
+              <Spin size="large" />
+              <div style={{ marginTop: 16, color: '#666' }}>
+                Loading visualizer...
+              </div>
+              <div style={{ marginTop: 8, fontSize: 12, color: '#999' }}>
+                {vizUrl}
+              </div>
+            </div>
+          )}
+          
+          {/* Error Display */}
+          {error && (
+            <div style={{
+              position: 'absolute',
+              top: '50%',
+              left: '50%',
+              transform: 'translate(-50%, -50%)',
+              zIndex: 10,
+              textAlign: 'center',
+              width: '80%'
+            }}>
+              <Alert
+                message="Visualizer Error"
+                description={
+                  <Space direction="vertical" style={{ width: '100%' }}>
+                    <Text>{error}</Text>
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      URL: {vizUrl}
+                    </Text>
+                    <Button 
+                      icon={<ReloadOutlined />} 
+                      onClick={handleRetry}
+                      type="primary"
+                    >
+                      Retry
+                    </Button>
+                  </Space>
+                }
+                type="error"
+                showIcon
+              />
+            </div>
+          )}
+          
+          {/* Visualizer Iframe */}
+          {vizUrl && (
+            <iframe
+              src={vizUrl}
+              style={{
+                width: '100%',
+                height: '100%',
+                border: 'none',
+                opacity: (loading || error) ? 0.3 : 1,
+                transition: 'opacity 0.3s ease-in-out'
+              }}
+              title="AI Thought Visualization"
+              onLoad={handleIframeLoad}
+              onError={handleIframeError}
+            />
+          )}
+        </div>
+      ),
+    },
+    {
+      key: 'thoughts',
+      label: (
+        <span>
+          <BulbOutlined /> Thought Chain
+        </span>
+      ),
+      children: (
+        <Card 
+          title={<span><BulbOutlined /> Reasoning Progression</span>}
+          style={{ borderRadius: '12px' }}
+          extra={<Tag color="processing" icon={<SyncOutlined spin />}>Live Demo</Tag>}
+        >
+          <Alert
+            message="Reasoning Timeline"
+            description="This shows the sequential steps in the AI's thought process, from initial analysis to final response"
+            type="info"
+            showIcon
+            style={{ marginBottom: 24 }}
+          />
+          
+          <Timeline>
+            {thoughts.map((node) => (
+              <Timeline.Item
+                key={node.id}
+                dot={getNodeIcon(node.type)}
+                color={getNodeColor(node.type)}
+              >
+                <Card size="small" style={{ borderLeft: `4px solid ${getNodeColor(node.type)}` }}>
+                  <Space direction="vertical" style={{ width: '100%' }}>
+                    <Space>
+                      <Tag color={getNodeColor(node.type)}>
+                        {node.type.toUpperCase()}
+                      </Tag>
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        {new Date(node.timestamp).toLocaleTimeString()}
+                      </Text>
+                    </Space>
+                    <Text strong>{node.content}</Text>
+                  </Space>
+                </Card>
+              </Timeline.Item>
+            ))}
+          </Timeline>
+        </Card>
+      ),
+    },
+    {
+      key: 'tools',
+      label: (
+        <span>
+          <ToolOutlined /> Tool Usage
+        </span>
+      ),
+      children: (
+        <Card 
+          title={<span><ToolOutlined /> Commands & Tools Executed</span>}
+          style={{ borderRadius: '12px' }}
+        >
+          <Alert
+            message="Tool Execution Log"
+            description="Detailed records of all tools, APIs, and commands invoked by the AI during processing"
+            type="info"
+            showIcon
+            style={{ marginBottom: 24 }}
+          />
+          
+          <Timeline>
+            {tools.map((tool, index) => (
+              <Timeline.Item
+                key={index}
+                dot={<ToolOutlined />}
+                color="#52c41a"
+              >
+                <Card size="small" style={{ borderLeft: '4px solid #52c41a' }}>
+                  <Space direction="vertical" style={{ width: '100%' }}>
+                    <Space wrap>
+                      <Tag color="success" style={{ fontWeight: 600 }}>
+                        {tool.name}
+                      </Tag>
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        {new Date(tool.timestamp).toLocaleTimeString()}
+                      </Text>
+                      <Tag color="processing">{tool.duration_ms}ms</Tag>
+                    </Space>
+                    
+                    {/* Input Parameters */}
+                    <div>
+                      <Text strong style={{ color: '#52c41a' }}>Input:</Text>
+                      <pre style={{
+                        background: '#f6ffed',
+                        padding: 12,
+                        borderRadius: 8,
+                        fontSize: 12,
+                        marginTop: 8,
+                        border: '1px solid #b7eb8f',
+                        overflow: 'auto',
+                        maxHeight: 200
+                      }}>
+                        {JSON.stringify(tool.input, null, 2)}
+                      </pre>
+                    </div>
+
+                    {/* Output Results */}
+                    <div>
+                      <Text strong style={{ color: '#1890ff' }}>Output:</Text>
+                      <pre style={{
+                        background: '#e6f7ff',
+                        padding: 12,
+                        borderRadius: 8,
+                        fontSize: 12,
+                        marginTop: 8,
+                        border: '1px solid #91d5ff',
+                        overflow: 'auto',
+                        maxHeight: 200
+                      }}>
+                        {JSON.stringify(tool.output, null, 2)}
+                      </pre>
+                    </div>
+                  </Space>
+                </Card>
+              </Timeline.Item>
+            ))}
+          </Timeline>
+        </Card>
+      ),
+    },
+  ];
+
+  // ==============================================================================
+  // RENDER: Main Component
+  // ==============================================================================
+  return (
+    <Layout style={{ minHeight: '100vh', background: 'linear-gradient(180deg, #f0f2f5 0%, #ffffff 100%)' }}>
+      <Content style={{ padding: '24px' }}>
+        <div style={{ maxWidth: 1400, margin: '0 auto' }}>
+          {/* Navigation Buttons */}
+          <Space style={{ marginBottom: 24 }} size="middle">
+            <Button 
+              icon={<ArrowLeftOutlined />} 
+              onClick={() => router.back()}
+              size="large"
+            >
+              Back
+            </Button>
+            <Link href="/settings">
+              <Button size="large">Settings</Button>
+            </Link>
+            <Link href="/chat-tools/journals">
+              <Button size="large">Journal</Button>
+            </Link>
+          </Space>
+
+          <Card 
+            style={{ 
+              borderRadius: '16px',
+              boxShadow: '0 4px 12px rgba(192.168.0.164.08)',
+              border: 'none'
+            }}
+          >
+            {/* Page Header */}
+            <div style={{ marginBottom: 24 }}>
+              <Title level={2} style={{ 
+                background: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)',
+                WebkitBackgroundClip: 'text',
+                WebkitTextFillColor: 'transparent',
+                marginBottom: 8
+              }}>
+                <ThunderboltOutlined /> AI Thought Visualizer
+              </Title>
+              <Paragraph type="secondary" style={{ fontSize: '16px' }}>
+                Real-time visualization of AI reasoning, decision-making, and tool execution
+              </Paragraph>
+            </div>
+
+            {/* Tabbed Content */}
+            <Tabs 
+              activeKey={activeTab} 
+              onChange={setActiveTab}
+              size="large"
+              items={tabItems}
+            />
+          </Card>
+        </div>
+      </Content>
+    </Layout>
+  );
+}
+

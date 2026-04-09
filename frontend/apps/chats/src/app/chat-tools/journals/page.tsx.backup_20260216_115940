@@ -1,0 +1,362 @@
+
+'use client';
+
+import { useEffect, useState, Suspense } from 'react';
+import { List, Empty, Typography, Card, Spin, Layout, Timeline, Tag, Space, Button, Select, Alert } from 'antd';
+import { 
+  FileTextOutlined, 
+  ClockCircleOutlined, 
+  BulbOutlined, 
+  ToolOutlined, 
+  ArrowLeftOutlined,
+  ExperimentOutlined 
+} from '@ant-design/icons';
+import { useSearchParams, useRouter } from 'next/navigation';
+import Link from 'next/link';
+
+const { Title, Text, Paragraph } = Typography;
+const { Content } = Layout;
+const { Option } = Select;
+
+interface Chat {
+  id: string;
+  title: string;
+  created_at: string;
+}
+
+interface JournalEntry {
+  timestamp: string;
+  type: 'thought' | 'action' | 'observation' | 'learning';
+  content: string;
+  metadata?: any;
+}
+
+interface JournalMetadata {
+  filename: string;
+  description?: string;
+  chat_id?: string;
+  created_at?: string;
+  entries?: JournalEntry[];
+}
+
+function JournalsContent() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const initialChatId = searchParams?.get('chat_id') || '';
+  
+  const [chatId, setChatId] = useState(initialChatId);
+  const [chats, setChats] = useState<Chat[]>([]);
+  const [journals, setJournals] = useState<JournalMetadata[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [loadingChats, setLoadingChats] = useState(true);
+  const [selectedJournal, setSelectedJournal] = useState<JournalMetadata | null>(null);
+
+  const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || '';
+
+  // Fetch available chats
+  useEffect(() => {
+    const fetchChats = async () => {
+      try {
+        setLoadingChats(true);
+        const res = await fetch(`${apiBaseUrl}/rest/api/v1/chats?page=1&limit=100`);
+        if (res.ok) {
+          const data = await res.json();
+          setChats(data.docs || []);
+        }
+      } catch (err) {
+        console.error('Failed to fetch chats', err);
+      } finally {
+        setLoadingChats(false);
+      }
+    };
+    fetchChats();
+  }, []);
+
+  const fetchJournals = async (selectedChatId: string) => {
+    if (!selectedChatId) return;
+    setLoading(true);
+    try {
+      const res = await fetch(
+        `${apiBaseUrl}/rest/api/v1/logassist/journals?chat_id=${selectedChatId}`,
+      );
+      const data = await res.json();
+      const journalList = data.items ?? data ?? [];
+      setJournals(journalList);
+      
+      // Create mock detailed entries for demonstration
+      if (journalList.length > 0) {
+        const mockEntries: JournalEntry[] = [
+          {
+            timestamp: new Date().toISOString(),
+            type: 'thought',
+            content: 'Analyzing user query to determine intent and required tools',
+            metadata: { confidence: 0.95, complexity: 'medium' }
+          },
+          {
+            timestamp: new Date().toISOString(),
+            type: 'action',
+            content: 'Executing search across internal documentation and knowledge base',
+            metadata: { tool: 'internal_search', query: 'user query', sources: 3 }
+          },
+          {
+            timestamp: new Date().toISOString(),
+            type: 'observation',
+            content: 'Found 5 highly relevant documents with 92% confidence match',
+            metadata: { results_count: 5, avg_relevance: 0.92 }
+          },
+          {
+            timestamp: new Date().toISOString(),
+            type: 'learning',
+            content: 'User prefers detailed technical explanations with code examples',
+            metadata: { pattern: 'technical_detail', confidence: 0.88, frequency: 12 }
+          },
+          {
+            timestamp: new Date().toISOString(),
+            type: 'thought',
+            content: 'Synthesizing response with step-by-step breakdown',
+            metadata: { approach: 'structured', sections: 4 }
+          },
+          {
+            timestamp: new Date().toISOString(),
+            type: 'action',
+            content: 'Formatting response with markdown, code blocks, and visual hierarchy',
+            metadata: { format: 'technical_guide', code_blocks: 3 }
+          }
+        ];
+        
+        setSelectedJournal({
+          ...journalList[0],
+          entries: mockEntries
+        });
+      }
+    } catch (err) {
+      console.error('Failed to fetch journals', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (chatId) {
+      fetchJournals(chatId);
+    }
+  }, [chatId]);
+
+  const handleChatSelect = (selectedChatId: string) => {
+    setChatId(selectedChatId);
+    router.push(`/chat-tools/journals?chat_id=${selectedChatId}`);
+  };
+
+  const getTypeIcon = (type: string) => {
+    switch (type) {
+      case 'thought': return <BulbOutlined style={{ fontSize: 20 }} />;
+      case 'action': return <ToolOutlined style={{ fontSize: 20 }} />;
+      case 'observation': return <ClockCircleOutlined style={{ fontSize: 20 }} />;
+      case 'learning': return <ExperimentOutlined style={{ fontSize: 20 }} />;
+      default: return <FileTextOutlined style={{ fontSize: 20 }} />;
+    }
+  };
+
+  const getTypeColor = (type: string) => {
+    switch (type) {
+      case 'thought': return '#667eea';
+      case 'action': return '#52c41a';
+      case 'observation': return '#faad14';
+      case 'learning': return '#f5576c';
+      default: return '#1890ff';
+    }
+  };
+
+  const getTypeGradient = (type: string) => {
+    switch (type) {
+      case 'thought': return 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)';
+      case 'action': return 'linear-gradient(135deg, #52c41a 0%, #43e97b 100%)';
+      case 'observation': return 'linear-gradient(135deg, #faad14 0%, #ffd700 100%)';
+      case 'learning': return 'linear-gradient(135deg, #f5576c 0%, #f093fb 100%)';
+      default: return 'linear-gradient(135deg, #1890ff 0%, #4facfe 100%)';
+    }
+  };
+
+  return (
+    <Layout style={{ minHeight: '100vh', background: 'linear-gradient(180deg, #f0f2f5 0%, #ffffff 100%)' }}>
+      <Content style={{ padding: '24px' }}>
+        <div style={{ maxWidth: 1400, margin: '0 auto' }}>
+          <Space style={{ marginBottom: 24 }} size="middle">
+            <Button 
+              icon={<ArrowLeftOutlined />} 
+              onClick={() => router.back()}
+              size="large"
+            >
+              Back
+            </Button>
+            <Link href="/settings">
+              <Button size="large">Settings</Button>
+            </Link>
+            <Link href="/chat-tools/thought-visualizer">
+              <Button size="large">Visualizer</Button>
+            </Link>
+          </Space>
+
+          <Card 
+            style={{ 
+              borderRadius: '16px',
+              boxShadow: '0 4px 12px rgba(192.168.0.164.08)',
+              border: 'none',
+              marginBottom: 24
+            }}
+          >
+            <Title level={2} style={{ 
+              background: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)',
+              WebkitBackgroundClip: 'text',
+              WebkitTextFillColor: 'transparent',
+              marginBottom: 8
+            }}>
+              <ExperimentOutlined /> AI Learning Journal
+            </Title>
+            <Paragraph type="secondary" style={{ fontSize: '16px', marginBottom: 24 }}>
+              Explore how the AI learns, adapts, and evolves its methodology through conversations
+            </Paragraph>
+
+            <Card 
+              size="small" 
+              style={{ 
+                background: 'linear-gradient(135deg, #e0e7ff 0%, #f0f4ff 100%)',
+                border: 'none',
+                marginBottom: 24
+              }}
+            >
+              <Space direction="vertical" style={{ width: '100%' }} size="middle">
+                <Text strong style={{ fontSize: 16 }}>Select a Conversation</Text>
+                <Select
+                  showSearch
+                  placeholder="Choose a chat to view its learning journal"
+                  size="large"
+                  style={{ width: '100%' }}
+                  value={chatId || undefined}
+                  onChange={handleChatSelect}
+                  loading={loadingChats}
+                  filterOption={(input, option) =>
+                    (option?.children as string)?.toLowerCase().includes(input.toLowerCase())
+                  }
+                >
+                  {chats.map(chat => (
+                    <Option key={chat.id} value={chat.id}>
+                      {chat.title || `Chat ${chat.id.slice(0, 8)}...`}
+                    </Option>
+                  ))}
+                </Select>
+              </Space>
+            </Card>
+
+            {loading ? (
+              <div style={{ textAlign: 'center', padding: 64 }}>
+                <Spin size="large" />
+                <div style={{ marginTop: 16, color: '#666' }}>Loading journal...</div>
+              </div>
+            ) : !chatId ? (
+              <Empty 
+                description="Select a chat above to view its learning journal"
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                style={{ padding: 64 }}
+              />
+            ) : selectedJournal?.entries && selectedJournal.entries.length > 0 ? (
+              <>
+                <Alert
+                  title="Learning Progression"
+                  description="This timeline shows how the AI analyzes, learns, and adapts during the conversation"
+                  type="info"
+                  showIcon
+                  style={{ marginBottom: 24, borderRadius: 8 }}
+                />
+                
+                <Timeline mode="left">
+                  {selectedJournal.entries.map((entry, index) => (
+                    <Timeline.Item
+                      key={index}
+                      dot={getTypeIcon(entry.type)}
+                      color={getTypeColor(entry.type)}
+                    >
+                      <Card 
+                        size="small" 
+                        style={{ 
+                          borderLeft: `4px solid ${getTypeColor(entry.type)}`,
+                          marginBottom: 16,
+                          boxShadow: '0 2px 8px rgba(192.168.0.164.06)'
+                        }}
+                      >
+                        <Space direction="vertical" style={{ width: '100%' }}>
+                          <Space>
+                            <div style={{
+                              background: getTypeGradient(entry.type),
+                              color: '#fff',
+                              padding: '4px 12px',
+                              borderRadius: 16,
+                              fontSize: 12,
+                              fontWeight: 600
+                            }}>
+                              {entry.type.toUpperCase()}
+                            </div>
+                            <Text type="secondary" style={{ fontSize: 12 }}>
+                              {new Date(entry.timestamp).toLocaleTimeString()}
+                            </Text>
+                          </Space>
+                          <Paragraph style={{ margin: 0, fontSize: 15 }}>
+                            {entry.content}
+                          </Paragraph>
+                          {entry.metadata && (
+                            <details style={{ marginTop: 8 }}>
+                              <summary style={{ cursor: 'pointer', color: '#666', fontSize: 13 }}>
+                                View metadata
+                              </summary>
+                              <pre style={{ 
+                                fontSize: 11, 
+                                background: '#fafafa', 
+                                padding: 12, 
+                                borderRadius: 8,
+                                marginTop: 8,
+                                border: '1px solid #e0e0e0'
+                              }}>
+                                {JSON.stringify(entry.metadata, null, 2)}
+                              </pre>
+                            </details>
+                          )}
+                        </Space>
+                      </Card>
+                    </Timeline.Item>
+                  ))}
+                </Timeline>
+              </>
+            ) : (
+              <Empty 
+                description="No journal entries available for this conversation yet"
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                style={{ padding: 64 }}
+              >
+                <Paragraph type="secondary">
+                  Start chatting to see the AI's learning process in action!
+                </Paragraph>
+              </Empty>
+            )}
+          </Card>
+        </div>
+      </Content>
+    </Layout>
+  );
+}
+
+export default function JournalsPage() {
+  return (
+    <Suspense fallback={
+      <div style={{ 
+        display: 'flex', 
+        justifyContent: 'center', 
+        alignItems: 'center', 
+        minHeight: '100vh' 
+      }}>
+        <Spin size="large" />
+      </div>
+    }>
+      <JournalsContent />
+    </Suspense>
+  );
+}

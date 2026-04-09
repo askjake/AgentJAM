@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+<head><title>CORS Debug</title></head>
+<body style="font-family: monospace; padding: 20px;">
+<h1>CORS Error Debugging</h1>
+<button onclick="testHealth()" style="padding: 10px;">Test /health</button>
+<button onclick="testSendMessage()" style="padding: 10px;">Test Send Message</button>
+<pre id="log" style="background: #000; color: #0f0; padding: 20px; margin-top: 20px;"></pre>
+
+<script>
+const log = document.getElementById('log');
+function addLog(msg) {
+    log.textContent += msg + '\n';
+    console.log(msg);
+}
+
+async function testHealth() {
+    log.textContent = '';
+    addLog('=== Testing /health endpoint ===');
+    addLog('Origin: ' + window.location.origin);
+    addLog('Target: http://10.79.81.39:8000/rest/api/v1/health');
+    addLog('');
+    
+    try {
+        const response = await fetch('http://10.79.81.39:8000/rest/api/v1/health', {
+            method: 'GET',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+        
+        addLog('✅ SUCCESS!');
+        addLog('Status: ' + response.status);
+        addLog('Headers:');
+        response.headers.forEach((v, k) => addLog('  ' + k + ': ' + v));
+        
+        const data = await response.json();
+        addLog('Response: ' + JSON.stringify(data));
+        
+    } catch (error) {
+        addLog('❌ ERROR!');
+        addLog('Type: ' + error.name);
+        addLog('Message: ' + error.message);
+        addLog('');
+        addLog('THIS IS THE ERROR YOU ARE SEEING:');
+        addLog(error.toString());
+    }
+}
+
+async function testSendMessage() {
+    log.textContent = '';
+    addLog('=== Testing Send Message ===');
+    
+    try {
+        // First get a chat ID
+        const chatsRes = await fetch('http://10.79.81.39:8000/rest/api/v1/chats?page=1&limit=1');
+        const chatsData = await chatsRes.json();
+        const chatId = chatsData.docs[0].chat_id;
+        
+        addLog('Using chat: ' + chatId);
+        
+        const response = await fetch('http://10.79.81.39:8000/rest/api/v1/chats/' + chatId + '/messages', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({content: 'test'})
+        });
+        
+        addLog('✅ Message sent! Status: ' + response.status);
+        
+    } catch (error) {
+        addLog('❌ ERROR!');
+        addLog('Message: ' + error.message);
+        addLog(error.toString());
+    }
+}
+</script>
+</body>
+</html>

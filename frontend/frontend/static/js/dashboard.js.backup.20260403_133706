@@ -1,0 +1,240 @@
+/*
+ * DISH Chat Agent Dashboard - Working Version
+ * Fully integrated with backend API
+ */
+
+// Configuration
+const CONFIG = {
+    API_BASE_URL: 'http://10.73.184.59:8000',
+    POLL_INTERVAL: 5000
+};
+
+// State
+const state = {
+    currentView: 'overview',
+    messages: [],
+    stats: {
+        conversations: 0,
+        tools: 0
+    }
+};
+
+// Initialize on load
+document.addEventListener('DOMContentLoaded', () => {
+    console.log('🤖 DISH Chat Agent Dashboard Initializing...');
+    initializeNavigation();
+    initializeChat();
+    loadStats();
+    console.log('✅ Dashboard Initialized');
+});
+
+// Navigation
+function initializeNavigation() {
+    const navButtons = document.querySelectorAll('.nav-btn');
+    
+    navButtons.forEach(btn => {
+        btn.addEventListener('click', () => {
+            const view = btn.getAttribute('data-view');
+            switchView(view);
+            
+            navButtons.forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+        });
+    });
+}
+
+function switchView(viewName) {
+    console.log(`Switching to view: ${viewName}`);
+    
+    document.querySelectorAll('.content-view').forEach(view => {
+        view.classList.remove('active');
+    });
+    
+    const targetView = document.getElementById(`${viewName}-view`);
+    if (targetView) {
+        targetView.classList.add('active');
+        state.currentView = viewName;
+    }
+}
+
+// Chat functionality
+function initializeChat() {
+    const chatInput = document.getElementById('chat-input');
+    const sendButton = document.getElementById('send-message');
+    
+    if (!chatInput || !sendButton) {
+        console.error('Chat elements not found');
+        return;
+    }
+    
+    // Auto-resize textarea
+    chatInput.addEventListener('input', function() {
+        this.style.height = 'auto';
+        this.style.height = (this.scrollHeight) + 'px';
+    });
+    
+    // Send on Enter (not Shift+Enter)
+    chatInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendMessage();
+        }
+    });
+    
+    sendButton.addEventListener('click', sendMessage);
+    
+    // Quick actions
+    document.querySelectorAll('.quick-action').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const action = btn.getAttribute('data-action');
+            handleQuickAction(action);
+        });
+    });
+}
+
+function sendMessage() {
+    const input = document.getElementById('chat-input');
+    const message = input.value.trim();
+    
+    if (!message) return;
+    
+    console.log('Sending message:', message);
+    
+    // Add user message
+    addMessageToChat('user', message);
+    
+    // Clear input
+    input.value = '';
+    input.style.height = 'auto';
+    
+    // Show typing indicator
+    showTypingIndicator();
+    
+    // Send to backend
+    fetch(`${CONFIG.API_BASE_URL}/api/chat`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            messages: [{ role: 'user', content: message }]
+        })
+    })
+    .then(response => {
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+        return response.json();
+    })
+    .then(data => {
+        hideTypingIndicator();
+        const response = data.response || data.content || 'No response';
+        addMessageToChat('assistant', response);
+        state.stats.conversations++;
+        updateStatsDisplay();
+    })
+    .catch(error => {
+        hideTypingIndicator();
+        console.error('Chat error:', error);
+        addMessageToChat('assistant', `❌ Error: ${error.message}. Please check backend connection.`);
+    });
+}
+
+function addMessageToChat(sender, content) {
+    const messagesContainer = document.getElementById('chat-messages');
+    const welcomeMessage = messagesContainer.querySelector('.welcome-message');
+    
+    if (welcomeMessage) {
+        welcomeMessage.style.display = 'none';
+    }
+    
+    const messageDiv = document.createElement('div');
+    messageDiv.className = `message ${sender}-message`;
+    messageDiv.style.cssText = `
+        display: flex;
+        gap: 10px;
+        margin-bottom: 15px;
+        animation: slideIn 0.3s ease-out;
+        ${sender === 'user' ? 'justify-content: flex-end;' : ''}
+    `;
+    
+    const bubble = document.createElement('div');
+    bubble.className = 'message-bubble';
+    bubble.style.cssText = `
+        max-width: 70%;
+        padding: 12px 16px;
+        border-radius: 12px;
+        ${sender === 'user' 
+            ? 'background: #667eea; color: white;' 
+            : 'background: #f7fafc; color: #2d3748; border: 1px solid #e2e8f0;'}
+        line-height: 1.5;
+        white-space: pre-wrap;
+    `;
+    bubble.textContent = content;
+    
+    messageDiv.appendChild(bubble);
+    messagesContainer.appendChild(messageDiv);
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    
+    state.messages.push({ sender, content });
+}
+
+function showTypingIndicator() {
+    const indicator = document.querySelector('.typing-indicator');
+    if (indicator) {
+        indicator.style.display = 'flex';
+    }
+}
+
+function hideTypingIndicator() {
+    const indicator = document.querySelector('.typing-indicator');
+    if (indicator) {
+        indicator.style.display = 'none';
+    }
+}
+
+function handleQuickAction(action) {
+    const actions = {
+        'search': 'Can you help me search for documentation?',
+        'cluster': 'Can you check the cluster status?',
+        'viewership': 'Can you show me viewership data?',
+        'help': 'What can you help me with?'
+    };
+    
+    const message = actions[action] || 'Help';
+    document.getElementById('chat-input').value = message;
+    sendMessage();
+}
+
+// Stats loading
+function loadStats() {
+    fetch(`${CONFIG.API_BASE_URL}/health`)
+        .then(response => response.json())
+        .then(data => {
+            console.log('Health data:', data);
+            state.stats.tools = data.tools_count || 0;
+            updateStatsDisplay();
+        })
+        .catch(error => {
+            console.error('Stats error:', error);
+        });
+}
+
+function updateStatsDisplay() {
+    const conversationsEl = document.getElementById('stat-conversations');
+    const toolsEl = document.getElementById('stat-tools');
+    
+    if (conversationsEl) {
+        conversationsEl.textContent = state.stats.conversations.toLocaleString();
+    }
+    if (toolsEl) {
+        toolsEl.textContent = state.stats.tools.toLocaleString();
+    }
+}
+
+// Utility functions
+function formatTime(date) {
+    return new Date(date).toLocaleTimeString();
+}
+
+console.log('🚀 DISH Chat Agent Dashboard JavaScript Loaded');

@@ -1,0 +1,670 @@
+/*
+ * DISH Chat Agent Dashboard - Main JavaScript
+ * Handles all interactive functionality
+ */
+
+// ==========================================================================
+// Configuration
+// ==========================================================================
+
+const CONFIG = {
+    API_BASE_URL: 'http://10.73.184.59:8000',
+    WS_URL: 'ws://localhost:8000/ws',
+    DOCS_PATH: '/home/montjac/Jakes-agent/docs/',
+    DOCS: {
+        coverity: 'COVERITY_ASSIST_API.md',
+        rca: 'RCA_GOLDEN_CONFIG.md',
+        jira: 'JIRA_TICKET_CREATION_GOLDEN_CONFIG.md',
+        reports: 'REPORT_METHODOLOGY.md'
+    }
+};
+
+// ==========================================================================
+// State Management
+// ==========================================================================
+
+const state = {
+    currentView: 'overview',
+    currentChat: null,
+    activeTool: null,
+    uptime: 0,
+    stats: {
+        conversations: 0,
+        success: 0,
+        responseTime: 2.3,
+        toolInvocations: 0
+    }
+};
+
+// ==========================================================================
+// Initialization
+// ==========================================================================
+
+document.addEventListener('DOMContentLoaded', () => {
+    console.log('🤖 DISH Chat Agent Dashboard Initializing...');
+    
+    initializeNavigation();
+    initializeChat();
+    initializeTools();
+    initializeAnalytics();
+    initializeDocs();
+    initializeSettings();
+    startUptimeCounter();
+    loadInitialData();
+    
+    console.log('✅ Dashboard Initialized Successfully');
+});
+
+// ==========================================================================
+// Navigation System
+// ==========================================================================
+
+function initializeNavigation() {
+    const navButtons = document.querySelectorAll('.nav-btn');
+    
+    navButtons.forEach(btn => {
+        btn.addEventListener('click', () => {
+            const view = btn.getAttribute('data-view');
+            switchView(view);
+            
+            // Update active button
+            navButtons.forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+        });
+    });
+    
+    // Sidebar tool navigation
+    document.querySelectorAll('.tool-item').forEach(item => {
+        item.addEventListener('click', () => {
+            switchView('tools');
+            const toolType = item.getAttribute('data-tool');
+            scrollToToolCategory(toolType);
+        });
+    });
+}
+
+function switchView(viewName) {
+    console.log(`Switching to view: ${viewName}`);
+    
+    // Hide all views
+    document.querySelectorAll('.content-view').forEach(view => {
+        view.classList.remove('active');
+    });
+    
+    // Show selected view
+    const targetView = document.getElementById(`${viewName}-view`);
+    if (targetView) {
+        targetView.classList.add('active');
+        state.currentView = viewName;
+    }
+}
+
+function scrollToToolCategory(category) {
+    // Implementation for scrolling to specific tool category
+    console.log(`Scrolling to tool category: ${category}`);
+}
+
+// ==========================================================================
+// Chat Interface
+// ==========================================================================
+
+function initializeChat() {
+    const chatInput = document.getElementById('chat-input');
+    const sendButton = document.getElementById('send-message');
+    const newChatBtn = document.getElementById('new-chat');
+    const exportBtn = document.getElementById('export-chat');
+    
+    // Auto-resize textarea
+    chatInput?.addEventListener('input', function() {
+        this.style.height = 'auto';
+        this.style.height = (this.scrollHeight) + 'px';
+    });
+    
+    // Send message on Enter (not Shift+Enter)
+    chatInput?.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendMessage();
+        }
+    });
+    
+    sendButton?.addEventListener('click', sendMessage);
+    newChatBtn?.addEventListener('click', createNewChat);
+    exportBtn?.addEventListener('click', exportChat);
+    
+    // Quick actions
+    document.querySelectorAll('.quick-action').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const action = btn.getAttribute('data-action');
+            handleQuickAction(action);
+        });
+    });
+    
+    // Voice input (placeholder)
+    document.getElementById('voice-input')?.addEventListener('click', () => {
+        alert('Voice input feature coming soon!');
+    });
+    
+    // File attachment (placeholder)
+    document.getElementById('attach-file')?.addEventListener('click', () => {
+        alert('File attachment feature coming soon!');
+    });
+}
+
+function sendMessage() {
+    const input = document.getElementById('chat-input');
+    const message = input.value.trim();
+    
+    if (!message) return;
+    
+    console.log('Sending message:', message);
+    
+    // Add user message to chat
+    addMessageToChat('user', message);
+    
+    // Clear input
+    input.value = '';
+    input.style.height = 'auto';
+    
+    // Show typing indicator
+    showTypingIndicator();
+    
+    // Simulate API call
+    setTimeout(() => {
+        hideTypingIndicator();
+        const response = generateMockResponse(message);
+        addMessageToChat('agent', response);
+    }, 1500);
+    
+    // Update stats
+    state.stats.conversations++;
+    updateStatsDisplay();
+}
+
+function addMessageToChat(sender, content) {
+    const messagesContainer = document.getElementById('chat-messages');
+    const welcomeMessage = messagesContainer.querySelector('.welcome-message');
+    
+    if (welcomeMessage) {
+        welcomeMessage.style.display = 'none';
+    }
+    
+    const messageDiv = document.createElement('div');
+    messageDiv.className = `chat-message ${sender}-message`;
+    messageDiv.innerHTML = `
+        <div class="message-avatar">
+            <i class="fas fa-${sender === 'user' ? 'user' : 'robot'}"></i>
+        </div>
+        <div class="message-content">
+            <div class="message-header">
+                <strong>${sender === 'user' ? 'You' : 'Agent'}</strong>
+                <span class="message-time">${new Date().toLocaleTimeString()}</span>
+            </div>
+            <div class="message-text">${content}</div>
+        </div>
+    `;
+    
+    messagesContainer.appendChild(messageDiv);
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+}
+
+function showTypingIndicator() {
+    document.querySelector('.typing-indicator').style.display = 'flex';
+}
+
+function hideTypingIndicator() {
+    document.querySelector('.typing-indicator').style.display = 'none';
+}
+
+function generateMockResponse(userMessage) {
+    const responses = {
+        'hello': 'Hello! I'm the DISH Chat Agent. How can I assist you today?',
+        'help': 'I can help you with:
+• Searching documentation
+• Kubernetes cluster inspection
+• Viewership data queries
+• Code execution
+• And much more!',
+        'search': 'I can search through internal DISH documentation, public web, and the Netra log system. What would you like to search for?',
+        'cluster': 'I can inspect your Kubernetes cluster. Would you like me to list pods, check deployments, or view node status?',
+        'default': 'I understand. Let me help you with that. Could you provide more details?'
+    };
+    
+    const lowerMessage = userMessage.toLowerCase();
+    
+    for (const [key, response] of Object.entries(responses)) {
+        if (lowerMessage.includes(key)) {
+            return response;
+        }
+    }
+    
+    return responses.default;
+}
+
+function createNewChat() {
+    console.log('Creating new chat');
+    const messagesContainer = document.getElementById('chat-messages');
+    messagesContainer.innerHTML = `
+        <div class="welcome-message">
+            <i class="fas fa-robot"></i>
+            <h3>Welcome to DISH Chat Agent</h3>
+            <p>I'm here to help you with infrastructure, development, analytics, and more!</p>
+            <div class="quick-actions">
+                <button class="quick-action" data-action="search">
+                    <i class="fas fa-search"></i> Search Documentation
+                </button>
+                <button class="quick-action" data-action="cluster">
+                    <i class="fas fa-server"></i> Check Cluster Status
+                </button>
+                <button class="quick-action" data-action="viewership">
+                    <i class="fas fa-chart-line"></i> Query Viewership
+                </button>
+                <button class="quick-action" data-action="help">
+                    <i class="fas fa-question-circle"></i> Show Capabilities
+                </button>
+            </div>
+        </div>
+    `;
+    
+    // Re-attach event listeners
+    document.querySelectorAll('.quick-action').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const action = btn.getAttribute('data-action');
+            handleQuickAction(action);
+        });
+    });
+}
+
+function exportChat() {
+    console.log('Exporting chat');
+    alert('Chat export feature coming soon!');
+}
+
+function handleQuickAction(action) {
+    const actions = {
+        'search': 'Can you help me search for documentation?',
+        'cluster': 'Can you check the cluster status?',
+        'viewership': 'Can you show me viewership data?',
+        'help': 'What can you help me with?'
+    };
+    
+    const message = actions[action] || 'Help';
+    document.getElementById('chat-input').value = message;
+    sendMessage();
+}
+
+// ==========================================================================
+// Tools System
+// ==========================================================================
+
+function initializeTools() {
+    document.querySelectorAll('.btn-test-tool').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const tool = btn.getAttribute('data-tool');
+            openToolTestModal(tool);
+        });
+    });
+    
+    // Modal controls
+    document.querySelector('.modal-close')?.addEventListener('click', closeToolModal);
+    document.getElementById('execute-tool')?.addEventListener('click', executeToolTest);
+}
+
+function openToolTestModal(toolName) {
+    console.log(`Opening test modal for tool: ${toolName}`);
+    
+    const modal = document.getElementById('tool-test-modal');
+    const toolNameSpan = document.getElementById('modal-tool-name');
+    const parametersDiv = document.getElementById('tool-parameters');
+    
+    toolNameSpan.textContent = toolName;
+    state.activeTool = toolName;
+    
+    // Generate parameter inputs based on tool
+    parametersDiv.innerHTML = generateToolParameters(toolName);
+    
+    modal.classList.add('active');
+}
+
+function closeToolModal() {
+    document.getElementById('tool-test-modal').classList.remove('active');
+    state.activeTool = null;
+}
+
+function generateToolParameters(toolName) {
+    const parameters = {
+        'internal_search': `
+            <div class="parameter-group">
+                <label>Query</label>
+                <input type="text" id="param-query" placeholder="Enter search query" />
+            </div>
+            <div class="parameter-group">
+                <label>Max Results</label>
+                <input type="number" id="param-top-k" value="5" min="1" max="10" />
+            </div>
+        `,
+        'cluster_inspect': `
+            <div class="parameter-group">
+                <label>Task</label>
+                <select id="param-task">
+                    <option>list sentry pods</option>
+                    <option>list all pods</option>
+                    <option>list nodes</option>
+                    <option>list deployments</option>
+                    <option>list services</option>
+                </select>
+            </div>
+        `,
+        'agent_run_shell': `
+            <div class="parameter-group">
+                <label>Command</label>
+                <input type="text" id="param-command" placeholder="kubectl get pods" />
+            </div>
+            <div class="alert">
+                <i class="fas fa-shield-alt"></i>
+                Only read-only kubectl commands are allowed
+            </div>
+        `,
+        'query_viewership': `
+            <div class="parameter-group">
+                <label>Service UIDs (comma-separated)</label>
+                <input type="text" id="param-services" placeholder="123,456,789" />
+            </div>
+            <div class="parameter-group">
+                <label>From Epoch (UTC)</label>
+                <input type="number" id="param-from" placeholder="1640000000" />
+            </div>
+            <div class="parameter-group">
+                <label>To Epoch (UTC)</label>
+                <input type="number" id="param-to" placeholder="1640086400" />
+            </div>
+        `
+    };
+    
+    return parameters[toolName] || '<p>No parameters required</p>';
+}
+
+function executeToolTest() {
+    console.log(`Executing tool: ${state.activeTool}`);
+    
+    const resultsDiv = document.getElementById('tool-results');
+    resultsDiv.textContent = 'Executing tool...';
+    
+    // Simulate tool execution
+    setTimeout(() => {
+        const mockResult = {
+            success: true,
+            tool: state.activeTool,
+            timestamp: new Date().toISOString(),
+            results: `Mock results for ${state.activeTool}\n\nTool executed successfully!`
+        };
+        
+        resultsDiv.textContent = JSON.stringify(mockResult, null, 2);
+        
+        // Update stats
+        state.stats.toolInvocations++;
+        updateStatsDisplay();
+    }, 1000);
+}
+
+// ==========================================================================
+// Analytics
+// ==========================================================================
+
+function initializeAnalytics() {
+    loadAnalyticsCharts();
+    loadActivityLog();
+}
+
+function loadAnalyticsCharts() {
+    // Tool Usage Chart (placeholder - would use real Chart.js)
+    console.log('Loading analytics charts...');
+    
+    // Note: In production, this would initialize Chart.js with real data
+}
+
+function loadActivityLog() {
+    const logBody = document.getElementById('activity-log-body');
+    if (!logBody) return;
+    
+    const mockLogs = [
+        { time: '14:32:15', action: 'Search Query', tool: 'internal_search', user: 'user@dish.com', status: 'success', duration: '1.2s' },
+        { time: '14:30:08', action: 'Cluster Inspection', tool: 'cluster_inspect', user: 'user@dish.com', status: 'success', duration: '2.5s' },
+        { time: '14:28:42', action: 'Python Execution', tool: 'agent_run_python', user: 'user@dish.com', status: 'success', duration: '3.1s' },
+        { time: '14:25:19', action: 'Viewership Query', tool: 'query_viewership', user: 'user@dish.com', status: 'success', duration: '1.8s' },
+        { time: '14:22:33', action: 'Shell Command', tool: 'agent_run_shell', user: 'user@dish.com', status: 'success', duration: '0.9s' }
+    ];
+    
+    logBody.innerHTML = mockLogs.map(log => `
+        <tr>
+            <td>${log.time}</td>
+            <td>${log.action}</td>
+            <td><code>${log.tool}</code></td>
+            <td>${log.user}</td>
+            <td><span class="status-success">✓ ${log.status}</span></td>
+            <td>${log.duration}</td>
+        </tr>
+    `).join('');
+}
+
+// ==========================================================================
+// Documentation
+// ==========================================================================
+
+function initializeDocs() {
+    document.querySelectorAll('.docs-nav li').forEach(item => {
+        item.addEventListener('click', () => {
+            const docType = item.getAttribute('data-doc');
+            loadDocumentation(docType);
+            
+            // Update active state
+            document.querySelectorAll('.docs-nav li').forEach(i => i.classList.remove('active'));
+            item.classList.add('active');
+        });
+    });
+    
+    document.querySelectorAll('.doc-card').forEach(card => {
+        card.addEventListener('click', (e) => {
+            e.preventDefault();
+            const docType = card.getAttribute('data-doc');
+            switchView('docs');
+            loadDocumentation(docType);
+        });
+    });
+    
+    document.getElementById('open-external')?.addEventListener('click', () => {
+        alert('Opening in external editor...');
+    });
+}
+
+function loadDocumentation(docType) {
+    console.log(`Loading documentation: ${docType}`);
+    
+    const docTitle = document.getElementById('doc-title');
+    const docBody = document.getElementById('doc-body');
+    
+    const docInfo = {
+        coverity: {
+            title: 'Coverity Assist API Documentation',
+            content: `# Coverity Assist API Documentation
+
+## Overview
+Multi-model LLM API supporting Claude Sonnet 4, Haiku 4.5, and Opus 4.
+
+## Key Features
+- Multiple model support
+- Authentication & security
+- Web search integration
+- Workflow automation
+
+## Endpoints
+- /api/chat - Main chat endpoint
+- /api/search - Search functionality
+- /api/models - Available models
+
+*Full documentation available at: ${CONFIG.DOCS_PATH}${CONFIG.DOCS.coverity}*`
+        },
+        rca: {
+            title: 'RCA Methodology',
+            content: `# Root Cause Analysis Methodology
+
+## Process
+1. Incident identification
+2. Data collection
+3. Timeline reconstruction
+4. Root cause determination
+5. Solution implementation
+
+## Best Practices
+- Document everything
+- Use structured templates
+- Follow golden config
+- Verify solutions
+
+*Full documentation available at: ${CONFIG.DOCS_PATH}${CONFIG.DOCS.rca}*`
+        },
+        jira: {
+            title: 'JIRA Ticket Creation',
+            content: `# JIRA Ticket Creation Guide
+
+## Ticket Types
+- Bug reports
+- Feature requests
+- Improvements
+- Tasks
+
+## Required Fields
+- Summary
+- Description
+- Priority
+- Component
+- Assignee
+
+*Full documentation available at: ${CONFIG.DOCS_PATH}${CONFIG.DOCS.jira}*`
+        },
+        reports: {
+            title: 'Report Writing Methodology',
+            content: `# Report Writing Standards
+
+## Structure
+1. Executive Summary
+2. Technical Details
+3. Analysis
+4. Recommendations
+5. Conclusion
+
+## Style Guidelines
+- Clear and concise
+- Technical accuracy
+- Professional tone
+- Well-organized
+
+*Full documentation available at: ${CONFIG.DOCS_PATH}${CONFIG.DOCS.reports}*`
+        }
+    };
+    
+    const doc = docInfo[docType];
+    if (doc) {
+        docTitle.textContent = doc.title;
+        // In production, this would use marked.js to render markdown
+        docBody.innerHTML = `<pre>${doc.content}</pre>`;
+    }
+}
+
+// ==========================================================================
+// Settings
+// ==========================================================================
+
+function initializeSettings() {
+    // Settings would be saved to localStorage or API
+    console.log('Settings initialized');
+}
+
+// ==========================================================================
+// Data Loading & Updates
+// ==========================================================================
+
+function loadInitialData() {
+    // Load initial stats
+    state.stats = {
+        conversations: 1247,
+        success: 1228,
+        responseTime: 2.3,
+        toolInvocations: 4687
+    };
+    
+    updateStatsDisplay();
+    updateActivityFeed();
+}
+
+function updateStatsDisplay() {
+    document.getElementById('stat-conversations').textContent = state.stats.conversations.toLocaleString();
+    document.getElementById('stat-success').textContent = state.stats.success.toLocaleString();
+    document.getElementById('stat-response').textContent = state.stats.responseTime + 's';
+    document.getElementById('stat-tools').textContent = state.stats.toolInvocations.toLocaleString();
+    
+    document.getElementById('active-chats').textContent = Math.floor(Math.random() * 10);
+    document.getElementById('total-sessions').textContent = state.stats.conversations;
+}
+
+function updateActivityFeed() {
+    const feed = document.getElementById('recent-activity');
+    if (!feed) return;
+    
+    feed.innerHTML = `
+        <div class="activity-item">
+            <i class="fas fa-search"></i>
+            <span>Internal search executed</span>
+            <span class="time">2m ago</span>
+        </div>
+        <div class="activity-item">
+            <i class="fas fa-server"></i>
+            <span>Cluster inspection completed</span>
+            <span class="time">5m ago</span>
+        </div>
+        <div class="activity-item">
+            <i class="fas fa-code"></i>
+            <span>Python script executed</span>
+            <span class="time">8m ago</span>
+        </div>
+    `;
+}
+
+function startUptimeCounter() {
+    setInterval(() => {
+        state.uptime++;
+        const days = Math.floor(state.uptime / 86400);
+        const hours = Math.floor((state.uptime % 86400) / 3600);
+        const minutes = Math.floor((state.uptime % 3600) / 60);
+        
+        document.getElementById('uptime').textContent = `${days}d ${hours}h ${minutes}m`;
+    }, 60000); // Update every minute
+}
+
+// ==========================================================================
+// Utility Functions
+// ==========================================================================
+
+function formatTime(date) {
+    return new Date(date).toLocaleTimeString();
+}
+
+function formatDate(date) {
+    return new Date(date).toLocaleDateString();
+}
+
+function showNotification(message, type = 'info') {
+    console.log(`[${type.toUpperCase()}] ${message}`);
+    // In production, this would show a toast notification
+}
+
+// ==========================================================================
+// Error Handling
+// ==========================================================================
+
+window.addEventListener('error', (event) => {
+    console.error('Global error:', event.error);
+    showNotification('An error occurred. Please check the console.', 'error');
+});
+
+console.log('🚀 DISH Chat Agent Dashboard JavaScript Loaded');

@@ -1,0 +1,311 @@
+
+'use client';
+
+import { Card, Typography, Layout, Space, Button, Tabs, Timeline, Tag, Spin } from 'antd';
+import { BulbOutlined, ToolOutlined, ApiOutlined, ArrowLeftOutlined, SyncOutlined, ThunderboltOutlined, RocketOutlined } from '@ant-design/icons';
+import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import Link from 'next/link';
+
+const { Title, Text, Paragraph } = Typography;
+const { Content } = Layout;
+
+interface ThoughtNode {
+  id: string;
+  type: 'thought' | 'tool' | 'decision';
+  content: string;
+  timestamp: string;
+}
+
+interface ToolUsage {
+  name: string;
+  input: any;
+  output: any;
+  timestamp: string;
+  duration_ms: number;
+}
+
+export default function ThoughtVisualizerPage() {
+  const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState('iframe');
+  const [thoughts, setThoughts] = useState<ThoughtNode[]>([]);
+  const [tools, setTools] = useState<ToolUsage[]>([]);
+  const router = useRouter();
+  
+  const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || '';
+  const vizUrl = `${apiBaseUrl}/rest/api/v1/viz/`;
+
+  useEffect(() => {
+    const mockThoughts: ThoughtNode[] = [
+      {
+        id: '1',
+        type: 'thought',
+        content: 'Analyzing user query to understand intent and context',
+        timestamp: new Date().toISOString(),
+      },
+      {
+        id: '2',
+        type: 'decision',
+        content: 'Determining which tools and knowledge sources to use',
+        timestamp: new Date().toISOString(),
+      },
+      {
+        id: '3',
+        type: 'tool',
+        content: 'Executing internal search for relevant documentation',
+        timestamp: new Date().toISOString(),
+      },
+      {
+        id: '4',
+        type: 'thought',
+        content: 'Synthesizing information from multiple sources',
+        timestamp: new Date().toISOString(),
+      }
+    ];
+
+    const mockTools: ToolUsage[] = [
+      {
+        name: 'internal_search',
+        input: { query: 'LLM configuration', sources: ['docs', 'wiki'] },
+        output: { results: 5, relevance: 0.92 },
+        timestamp: new Date().toISOString(),
+        duration_ms: 234
+      },
+      {
+        name: 'public_web_search',
+        input: { query: 'Anthropic Claude API documentation' },
+        output: { results: 10, top_result: 'docs.anthropic.com' },
+        timestamp: new Date().toISOString(),
+        duration_ms: 567
+      },
+      {
+        name: 'agent_run_python',
+        input: { code: 'import requests; response = requests.get(...)' },
+        output: { success: true, output: 'Data fetched successfully' },
+        timestamp: new Date().toISOString(),
+        duration_ms: 1234
+      }
+    ];
+
+    setThoughts(mockThoughts);
+    setTools(mockTools);
+  }, []);
+
+  const handleIframeLoad = () => {
+    setLoading(false);
+  };
+
+  const getNodeColor = (type: string) => {
+    switch (type) {
+      case 'thought': return '#667eea';
+      case 'tool': return '#52c41a';
+      case 'decision': return '#faad14';
+      default: return '#1890ff';
+    }
+  };
+
+  const getNodeIcon = (type: string) => {
+    switch (type) {
+      case 'thought': return <BulbOutlined />;
+      case 'tool': return <ToolOutlined />;
+      case 'decision': return <ApiOutlined />;
+      default: return <BulbOutlined />;
+    }
+  };
+
+  const tabItems = [
+    {
+      key: 'iframe',
+      label: (
+        <span>
+          <RocketOutlined /> Interactive View
+        </span>
+      ),
+      children: (
+        <div style={{ height: 600, position: 'relative', borderRadius: '12px', overflow: 'hidden' }}>
+          {loading && (
+            <div style={{
+              position: 'absolute',
+              top: '50%',
+              left: '50%',
+              transform: 'translate(-50%, -50%)',
+              zIndex: 10,
+              textAlign: 'center'
+            }}>
+              <Spin size="large" />
+              <div style={{ marginTop: 16, color: '#666' }}>Loading visualizer...</div>
+            </div>
+          )}
+          <iframe
+            src={vizUrl}
+            style={{
+              width: '100%',
+              height: '100%',
+              border: 'none',
+              opacity: loading ? 0.3 : 1,
+              transition: 'opacity 0.3s ease-in-out'
+            }}
+            title="AI Thought Visualization"
+            onLoad={handleIframeLoad}
+          />
+        </div>
+      ),
+    },
+    {
+      key: 'thoughts',
+      label: (
+        <span>
+          <BulbOutlined /> Thought Chain
+        </span>
+      ),
+      children: (
+        <Card 
+          title={<span><BulbOutlined /> Reasoning Progression</span>}
+          style={{ borderRadius: '12px' }}
+          extra={<Tag color="processing" icon={<SyncOutlined spin />}>Live</Tag>}
+        >
+          <Timeline>
+            {thoughts.map((node) => (
+              <Timeline.Item
+                key={node.id}
+                dot={getNodeIcon(node.type)}
+                color={getNodeColor(node.type)}
+              >
+                <Card size="small" style={{ borderLeft: `4px solid ${getNodeColor(node.type)}` }}>
+                  <Space direction="vertical" style={{ width: '100%' }}>
+                    <Space>
+                      <Tag color={getNodeColor(node.type)}>
+                        {node.type.toUpperCase()}
+                      </Tag>
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        {new Date(node.timestamp).toLocaleTimeString()}
+                      </Text>
+                    </Space>
+                    <Text strong>{node.content}</Text>
+                  </Space>
+                </Card>
+              </Timeline.Item>
+            ))}
+          </Timeline>
+        </Card>
+      ),
+    },
+    {
+      key: 'tools',
+      label: (
+        <span>
+          <ToolOutlined /> Tool Usage
+        </span>
+      ),
+      children: (
+        <Card 
+          title={<span><ToolOutlined /> Commands & Tools Executed</span>}
+          style={{ borderRadius: '12px' }}
+        >
+          <Timeline>
+            {tools.map((tool, index) => (
+              <Timeline.Item
+                key={index}
+                dot={<ToolOutlined />}
+                color="#52c41a"
+              >
+                <Card size="small" style={{ borderLeft: '4px solid #52c41a' }}>
+                  <Space direction="vertical" style={{ width: '100%' }}>
+                    <Space>
+                      <Tag color="success">{tool.name}</Tag>
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        {new Date(tool.timestamp).toLocaleTimeString()}
+                      </Text>
+                      <Tag color="processing">{tool.duration_ms}ms</Tag>
+                    </Space>
+                    
+                    <div>
+                      <Text strong style={{ color: '#52c41a' }}>Input:</Text>
+                      <pre style={{
+                        background: '#f6ffed',
+                        padding: 12,
+                        borderRadius: 8,
+                        fontSize: 12,
+                        marginTop: 8,
+                        border: '1px solid #b7eb8f'
+                      }}>
+                        {JSON.stringify(tool.input, null, 2)}
+                      </pre>
+                    </div>
+
+                    <div>
+                      <Text strong style={{ color: '#1890ff' }}>Output:</Text>
+                      <pre style={{
+                        background: '#e6f7ff',
+                        padding: 12,
+                        borderRadius: 8,
+                        fontSize: 12,
+                        marginTop: 8,
+                        border: '1px solid #91d5ff'
+                      }}>
+                        {JSON.stringify(tool.output, null, 2)}
+                      </pre>
+                    </div>
+                  </Space>
+                </Card>
+              </Timeline.Item>
+            ))}
+          </Timeline>
+        </Card>
+      ),
+    },
+  ];
+
+  return (
+    <Layout style={{ minHeight: '100vh', background: 'linear-gradient(180deg, #f0f2f5 0%, #ffffff 100%)' }}>
+      <Content style={{ padding: '24px' }}>
+        <div style={{ maxWidth: 1400, margin: '0 auto' }}>
+          <Space style={{ marginBottom: 24 }} size="middle">
+            <Button 
+              icon={<ArrowLeftOutlined />} 
+              onClick={() => router.back()}
+              size="large"
+            >
+              Back
+            </Button>
+            <Link href="/settings">
+              <Button size="large">Settings</Button>
+            </Link>
+            <Link href="/chat-tools/journals">
+              <Button size="large">Journal</Button>
+            </Link>
+          </Space>
+
+          <Card 
+            style={{ 
+              borderRadius: '16px',
+              boxShadow: '0 4px 12px rgba(192.168.0.164.08)',
+              border: 'none'
+            }}
+          >
+            <div style={{ marginBottom: 24 }}>
+              <Title level={2} style={{ 
+                background: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)',
+                WebkitBackgroundClip: 'text',
+                WebkitTextFillColor: 'transparent',
+                marginBottom: 8
+              }}>
+                <ThunderboltOutlined /> AI Thought Visualizer
+              </Title>
+              <Paragraph type="secondary" style={{ fontSize: '16px' }}>
+                Real-time visualization of AI reasoning, decision-making, and tool execution
+              </Paragraph>
+            </div>
+
+            <Tabs 
+              activeKey={activeTab} 
+              onChange={setActiveTab}
+              size="large"
+              items={tabItems}
+            />
+          </Card>
+        </div>
+      </Content>
+    </Layout>
+  );
+}

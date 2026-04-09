@@ -1,0 +1,132 @@
+from __future__ import annotations
+
+import asyncio
+import json
+from typing import Any, Optional
+
+import requests
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
+from pydantic import Field
+
+
+def _content_to_text(content: Any) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                if item.get("type") == "text":
+                    parts.append(str(item.get("text", "")))
+                else:
+                    parts.append(json.dumps(item, ensure_ascii=False))
+            else:
+                parts.append(str(item))
+        return "\n".join(x for x in parts if x)
+    if isinstance(content, dict):
+        if content.get("type") == "text":
+            return str(content.get("text", ""))
+        return json.dumps(content, ensure_ascii=False)
+    return str(content)
+
+
+class CoverityAssistChatModel(BaseChatModel):
+    model_name: str = Field(default="coverity-assist")
+    endpoint_url: str = Field(...)
+    bearer_token: str = Field(...)
+    max_tokens: Optional[int] = Field(default=None)
+    verify_ssl: bool = Field(default=False)
+    use_top_level_system: bool = Field(default=False)
+    inference_profile_arn: Optional[str] = Field(default=None)
+    request_timeout: int = Field(default=240)
+    include_system_prompt: bool = Field(default=False)
+
+    @property
+    def _llm_type(self) -> str:
+        return "coverity-assist"
+
+    @property
+    def _identifying_params(self) -> dict[str, Any]:
+        return {
+            "model_name": self.model_name,
+            "endpoint_url": self.endpoint_url,
+            "max_tokens": self.max_tokens,
+            "verify_ssl": self.verify_ssl,
+            "use_top_level_system": self.use_top_level_system,
+            "inference_profile_arn": self.inference_profile_arn,
+            "include_system_prompt": self.include_system_prompt,
+        }
+
+    def bind_tools(self, tools: Any, **kwargs: Any) -> "CoverityAssistChatModel":
+        # Native tool-calling is not exposed by the Coverity gateway contract.
+        # Agent/tool mode is handled at a higher level with an explicit planner loop.
+        return self
+
+    def _split_messages(self, messages: list[BaseMessage]) -> tuple[str, Optional[str]]:
+        user_text = ""
+        system_text: Optional[str] = None
+
+        for message in messages:
+            msg_type = getattr(message, "type", "").lower()
+            if isinstance(message, HumanMessage) or msg_type in {"human", "user"}:
+                text = _content_to_text(getattr(message, "content", ""))
+                if text.strip():
+                    user_text = text.strip()
+            elif self.include_system_prompt and (isinstance(message, SystemMessage) or msg_type == "system"):
+                text = _content_to_text(getattr(message, "content", ""))
+                if text.strip():
+                    system_text = text.strip()
+
+        return user_text, system_text
+
+    def _build_payload(self, messages: list[BaseMessage], stop: Optional[list[str]] = None) -> dict[str, Any]:
+        user_text, system_text = self._split_messages(messages)
+        payload: dict[str, Any] = {
+            "messages": [{"role": "user", "content": user_text}],
+        }
+
+        if self.max_tokens is not None:
+            payload["max_tokens"] = self.max_tokens
+
+        if system_text:
+            if self.use_top_level_system:
+                payload["system"] = system_text
+            else:
+                payload["messages"][0]["content"] = f"{system_text}\n\n{user_text}".strip()
+
+        if self.inference_profile_arn:
+            payload["inference_profile_arn"] = self.inference_profile_arn
+
+        if stop:
+            payload["stop"] = stop
+
+        return payload
+
+    def _call_gateway(self, payload: dict[str, Any]) -> str:
+        response = requests.post(
+            self.endpoint_url,
+            headers={
+                "Authorization": f"Bearer {self.bearer_token}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=self.request_timeout,
+            verify=self.verify_ssl,
+            allow_redirects=True,
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data.get("content") or data.get("response") or data.get("text") or json.dumps(data)
+
+    def _generate(self, messages: list[BaseMessage], stop: Optional[list[str]] = None, run_manager: Any = None, **kwargs: Any) -> ChatResult:
+        text = self._call_gateway(self._build_payload(messages, stop=stop))
+        return ChatResult(generations=[ChatGeneration(message=AIMessage(content=text))])
+
+    async def _agenerate(self, messages: list[BaseMessage], stop: Optional[list[str]] = None, run_manager: Any = None, **kwargs: Any) -> ChatResult:
+        return await asyncio.to_thread(self._generate, messages, stop, run_manager, **kwargs)

@@ -1,0 +1,195 @@
+"""
+Enhanced LLM Chat Models Module
+Supports multiple providers: AWS Bedrock, OpenAI, Anthropic
+"""
+from functools import cache
+from typing import Optional
+
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_aws import ChatBedrockConverse
+from botocore.config import Config
+
+# ANNOTATION: Import OpenAI and Anthropic providers
+# These are optional - will gracefully fall back if not installed
+try:
+    from langchain_openai import ChatOpenAI
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+
+try:
+    from langchain_anthropic import ChatAnthropic
+    ANTHROPIC_AVAILABLE = True
+except ImportError:
+    ANTHROPIC_AVAILABLE = False
+
+from app.config import get_settings
+
+settings = get_settings()
+
+
+def get_model(efficient: bool = False) -> BaseChatModel:
+    """
+    Get chat model objects with multi-provider support.
+    
+    ANNOTATION: This function now supports three providers:
+    1. AWS Bedrock (default) - using ChatBedrockConverse
+    2. OpenAI - using ChatOpenAI
+    3. Anthropic - using ChatAnthropic
+    
+    The provider is determined by settings.PLLM_PROVIDER or settings.ELLM_PROVIDER
+    
+    Args:
+        efficient: use smaller and more cost friendly model
+
+    Returns:
+        A Langchain chat model object.
+    """
+    # ANNOTATION: Determine which provider and model to use
+    if efficient and settings.ELLM_MODEL:
+        provider = settings.ELLM_PROVIDER
+        model_name = settings.ELLM_MODEL
+        max_tokens = 4096
+    else:
+        provider = settings.PLLM_PROVIDER
+        model_name = settings.PLLM_MODEL
+        max_tokens = settings.MAX_OUTPUT_COUNT
+    
+    # ANNOTATION: Initialize model based on provider
+    if provider == "aws-bedrock":
+        # AWS Bedrock with Claude models
+        # Configure boto3 client with timeouts
+        boto_config = Config(
+            read_timeout=settings.BEDROCK_READ_TIMEOUT,
+            connect_timeout=settings.BEDROCK_CONNECT_TIMEOUT,
+            retries={'max_attempts': 3, 'mode': 'standard'}
+        )
+        
+        model = ChatBedrockConverse(
+            model=model_name,
+            max_tokens=max_tokens,
+            region_name=settings.AWS_REGION,
+            disable_streaming=False,
+            config=boto_config  # Pass boto3 config with timeouts
+        )
+        
+    elif provider == "openai":
+        # OpenAI with GPT models
+        if not OPENAI_AVAILABLE:
+            raise ImportError(
+                "langchain-openai not installed. "
+                "Install with: pip install langchain-openai"
+            )
+        
+        model = ChatOpenAI(
+            model=model_name,
+            max_tokens=max_tokens,
+            temperature=settings.DEFAULT_TEMP,
+            # ANNOTATION: API key from environment or user config
+            api_key=getattr(settings, 'OPENAI_API_KEY', None),
+            streaming=True,
+            timeout=settings.BEDROCK_READ_TIMEOUT  # Apply timeout to OpenAI too
+        )
+        
+    elif provider == "anthropic":
+        # Anthropic with Claude models (direct API)
+        if not ANTHROPIC_AVAILABLE:
+            raise ImportError(
+                "langchain-anthropic not installed. "
+                "Install with: pip install langchain-anthropic"
+            )
+        
+        model = ChatAnthropic(
+            model=model_name,
+            max_tokens=max_tokens,
+            temperature=settings.DEFAULT_TEMP,
+            # ANNOTATION: API key from environment or user config
+            api_key=getattr(settings, 'ANTHROPIC_API_KEY', None),
+            streaming=True,
+            timeout=settings.BEDROCK_READ_TIMEOUT  # Apply timeout to Anthropic too
+        )
+        
+    else:
+        raise NotImplementedError(
+            f"Provider {provider} not implemented. "
+            f"Supported providers: aws-bedrock, openai, anthropic"
+        )
+    
+    return model
+
+
+def get_model_by_config(
+    provider_type: str,
+    model_id: str,
+    api_key: Optional[str] = None,
+    region: Optional[str] = None,
+    max_tokens: Optional[int] = None,
+    temperature: Optional[float] = None
+) -> BaseChatModel:
+    """
+    Get model by explicit configuration (for user-selected LLMs).
+    
+    ANNOTATION: This function allows dynamic model selection based on
+    user configuration from the database. Used by the LLM selection feature.
+    
+    Args:
+        provider_type: Provider identifier (aws-bedrock, openai, anthropic)
+        model_id: Model identifier for the provider
+        api_key: Optional API key override
+        region: Optional region (for AWS)
+        max_tokens: Optional max tokens override
+        temperature: Optional temperature override
+        
+    Returns:
+        A configured Langchain chat model object
+    """
+    # ANNOTATION: Set defaults from settings
+    max_tokens = max_tokens or settings.MAX_OUTPUT_COUNT
+    temperature = temperature or settings.DEFAULT_TEMP
+    
+    if provider_type == "aws-bedrock":
+        # Configure boto3 client with timeouts
+        boto_config = Config(
+            read_timeout=settings.BEDROCK_READ_TIMEOUT,
+            connect_timeout=settings.BEDROCK_CONNECT_TIMEOUT,
+            retries={'max_attempts': 3, 'mode': 'standard'}
+        )
+        
+        model = ChatBedrockConverse(
+            model=model_id,
+            max_tokens=max_tokens,
+            region_name=region or settings.AWS_REGION,
+            disable_streaming=False,
+            config=boto_config  # Pass boto3 config with timeouts
+        )
+        
+    elif provider_type == "openai":
+        if not OPENAI_AVAILABLE:
+            raise ImportError("langchain-openai not installed")
+        
+        model = ChatOpenAI(
+            model=model_id,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            api_key=api_key or getattr(settings, 'OPENAI_API_KEY', None),
+            streaming=True,
+            timeout=settings.BEDROCK_READ_TIMEOUT
+        )
+        
+    elif provider_type == "anthropic":
+        if not ANTHROPIC_AVAILABLE:
+            raise ImportError("langchain-anthropic not installed")
+        
+        model = ChatAnthropic(
+            model=model_id,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            api_key=api_key or getattr(settings, 'ANTHROPIC_API_KEY', None),
+            streaming=True,
+            timeout=settings.BEDROCK_READ_TIMEOUT
+        )
+        
+    else:
+        raise ValueError(f"Unsupported provider: {provider_type}")
+    
+    return model
