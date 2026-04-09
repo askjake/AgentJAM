@@ -5,7 +5,8 @@
   "max_tokens": 8192,
   "reasoning_max_tokens": 128000,
   "auto_routing": true,
-  "complexity_threshold": 0.7,
+  "complexity_threshold": 0.8,
+  "simplicity_threshold": 0.15,
   "model_arns": {
     "opus": "arn:aws:bedrock:us-west-2:233532778289:inference-profile/us.anthropic.claude-opus-4-6-v1",
     "sonnet": "arn:aws:bedrock:us-west-2:233532778289:inference-profile/us.anthropic.claude-sonnet-4-6",
