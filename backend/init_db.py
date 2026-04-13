@@ -68,6 +68,17 @@ def init_database():
         )
     """)
     
+    # Conversations table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS conversations (
+            chat_id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            messages TEXT NOT NULL,
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL,
+            metadata TEXT
+        )
+    """)
     conn.commit()
     conn.close()
     

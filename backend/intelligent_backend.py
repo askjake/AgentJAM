@@ -750,7 +750,13 @@ try:
 except Exception as e:
     print(f'⚠️  Database initialization warning: {e}')
 
-conversations = {}
+# Load conversations from database
+try:
+    conversations = persist.load_conversations()
+    print(f"✅ Loaded {len(conversations)} conversations from database")
+except Exception as e:
+    print(f"⚠️  Could not load conversations: {e}")
+    conversations = {}
 journal_entries = []
 tool_usage_log = []
 response_times = []
@@ -1181,7 +1187,7 @@ def chat():
             {'role': 'system', 'content': context}
         ] + processed_messages
         
-        llm_response = call_llm_with_tools(enhanced_messages, reasoning_mode)
+        llm_response = agentic_loop(enhanced_messages, reasoning_mode, max_iterations=10)
         
         # Save assistant response
         conversations[chat_id]['messages'].append({
@@ -1192,6 +1198,12 @@ def chat():
         })
         
         conversations[chat_id]['updated_at'] = datetime.utcnow().isoformat()
+
+        # Persist conversation to database
+        try:
+            persist.save_conversation(chat_id, conversations[chat_id])
+        except Exception as e:
+            logger.error(f'Failed to persist conversation {chat_id}: {e}')
         
         # Track response time
         response_time = (datetime.utcnow() - start).total_seconds()
@@ -1308,7 +1320,13 @@ def chat_stream():
                 response = requests.post(
                     stream_url,
                     headers=headers,
-                    json={'messages': enhanced_messages, 'reasoning_mode': reasoning_mode},
+                    json={
+                        'messages': enhanced_messages,
+                        'reasoning_mode': reasoning_mode,
+                        'inference_profile_arn': get_model_arn(reasoning_mode),
+                        'max_tokens': 128000 if reasoning_mode else 8192,
+                        'tools': format_tools_for_llm()
+                    },
                     stream=True,
                     timeout=3600
                 )
@@ -1339,6 +1357,12 @@ def chat_stream():
                                 'metadata': metadata
                             })
                             conversations[chat_id]['updated_at'] = datetime.utcnow().isoformat()
+                            
+                            # Persist conversation to database
+                            try:
+                                persist.save_conversation(chat_id, conversations[chat_id])
+                            except Exception as e:
+                                logger.error(f'Failed to persist conversation {chat_id}: {e}')
                             
                             # Log activity
                             add_activity('chat_message_stream', {
@@ -1415,6 +1439,7 @@ def manage_conversation(chat_id: str):
         if request.method == 'DELETE':
             if chat_id in conversations:
                 del conversations[chat_id]
+                persist.delete_conversation(chat_id)
                 add_activity('conversation_deleted', {'chat_id': chat_id})
                 return jsonify({'success': True})
             return jsonify({'error': 'Conversation not found'}), 404
@@ -1934,6 +1959,92 @@ def build_enhanced_context(chat_id: str, reasoning_mode: bool) -> str:
     
     return context
 
+
+# ============================================================================
+# MODEL SELECTION CONFIGURATION (Added 2026-04-09)
+# ============================================================================
+
+MODEL_ARNS = {
+    "opus": "arn:aws:bedrock:us-west-2:233532778289:inference-profile/us.anthropic.claude-opus-4-6-v1",
+    "sonnet": "arn:aws:bedrock:us-west-2:233532778289:inference-profile/us.anthropic.claude-sonnet-4-6",
+    "haiku": "arn:aws:bedrock:us-west-2:233532778289:inference-profile/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+}
+
+DEFAULT_MODEL = "sonnet"
+REASONING_MODEL = "opus"
+
+def get_model_arn(reasoning_mode: bool = False) -> str:
+    if reasoning_mode:
+        logger.info("🧠 Reasoning mode → Opus")
+        return MODEL_ARNS["opus"]
+    else:
+        logger.info("📝 Standard mode → Sonnet")
+        return MODEL_ARNS["sonnet"]
+
+
+def format_tools_for_llm():
+    """Format tool definitions for LLM (OpenAI tools format)"""
+    tools = []
+    tools.append({
+        "type": "function",
+        "function": {
+            "name": "agent_run_shell",
+            "description": "Execute shell commands on the agent host. Use for file operations, system commands, network operations.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "description": "Shell command to execute"},
+                    "timeout_seconds": {"type": "integer", "description": "Timeout in seconds", "default": 600}
+                },
+                "required": ["command"]
+            }
+        }
+    })
+    tools.append({
+        "type": "function",
+        "function": {
+            "name": "agent_run_python",
+            "description": "Execute Python code on the agent for data analysis, computations, file processing",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {"type": "string", "description": "Python code to execute"},
+                    "chat_id": {"type": "string", "description": "Chat ID for workspace"}
+                },
+                "required": ["code", "chat_id"]
+            }
+        }
+    })
+    tools.append({
+        "type": "function",
+        "function": {
+            "name": "internal_search",
+            "description": "Search DISH internal knowledge base, documentation, Confluence, wikis",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query"}
+                },
+                "required": ["query"]
+            }
+        }
+    })
+    tools.append({
+        "type": "function",
+        "function": {
+            "name": "cluster_inspect",
+            "description": "Inspect Kubernetes cluster resources (pods, services, deployments)",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {"type": "string", "description": "Task like list pods, describe pod X, list nodes"}
+                },
+                "required": ["task"]
+            }
+        }
+    })
+    return tools
+
 def call_llm_with_tools(messages: list, reasoning_mode: bool = False) -> Dict[str, Any]:
     """Call LLM with retry logic for 504 errors"""
     headers = {'Content-Type': 'application/json'}
@@ -1966,7 +2077,12 @@ def call_llm_with_tools(messages: list, reasoning_mode: bool = False) -> Dict[st
             response = requests.post(
                 COVERITY_ASSIST_URL,
                 headers=headers,
-                json={'messages': messages},
+                json={
+                'messages': messages,
+                'inference_profile_arn': get_model_arn(reasoning_mode),
+                'max_tokens': 128000 if reasoning_mode else 8192,
+                'tools': format_tools_for_llm()
+            },
                 timeout=REQUEST_TIMEOUT
             )
             
@@ -2013,6 +2129,110 @@ def call_llm_with_tools(messages: list, reasoning_mode: bool = False) -> Dict[st
         'response': "Error: Failed after max retries",
         'tool_calls': []
     }
+
+
+
+def agentic_loop(messages: list, reasoning_mode: bool = False, max_iterations: int = 10) -> dict:
+    """
+    Agentic loop with tool execution
+    
+    Calls LLM → Executes tools → Re-calls LLM with results → Repeats until done
+    Max iterations prevents infinite loops.
+    """
+    iteration = 0
+    all_tool_calls = []
+    
+    while iteration < max_iterations:
+        iteration += 1
+        logger.info(f'🔁 Agentic loop iteration {iteration}/{max_iterations}')
+        
+        # Call LLM
+        llm_response = call_llm_with_tools(messages, reasoning_mode)
+        
+        # Check for tool calls
+        tool_calls = llm_response.get('tool_calls', [])
+        
+        if not tool_calls:
+            # No more tools to execute - return final response
+            logger.info(f'✅ Agentic loop complete after {iteration} iterations')
+            return {
+                'response': llm_response.get('response', ''),
+                'reasoning': llm_response.get('reasoning'),
+                'tool_calls': all_tool_calls,  # Return ALL tool calls made
+                'iterations': iteration,
+                'model': llm_response.get('model')
+            }
+        
+        # Add assistant message with tool calls to conversation
+        messages.append({
+            'role': 'assistant',
+            'content': llm_response.get('response', ''),
+            'tool_calls': tool_calls
+        })
+        
+        # Execute each tool
+        for tool_call in tool_calls:
+            tool_name = tool_call.get('name') or tool_call.get('function', {}).get('name')
+            tool_args = tool_call.get('arguments') or tool_call.get('function', {}).get('arguments', '{}')
+            tool_id = tool_call.get('id', f'call_{iteration}_{tool_name}')
+            
+            logger.info(f'🔧 Executing tool: {tool_name}')
+            logger.info(f'   Arguments: {tool_args}')
+            
+            all_tool_calls.append({
+                'name': tool_name,
+                'arguments': tool_args,
+                'id': tool_id
+            })
+            
+            # Parse arguments if they're a JSON string
+            if isinstance(tool_args, str):
+                try:
+                    tool_args_dict = json.loads(tool_args)
+                except json.JSONDecodeError:
+                    tool_args_dict = {'raw': tool_args}
+            else:
+                tool_args_dict = tool_args
+            
+            # Execute the tool
+            try:
+                # Check if it's a local tool
+                if tool_name in LOCAL_TOOL_MAP:
+                    tool_func = LOCAL_TOOL_MAP[tool_name]
+                    if tool_func:
+                        tool_result = str(tool_func(**tool_args_dict))
+                        logger.info(f'   ✅ Local tool executed: {tool_result[:200]}...')
+                    else:
+                        tool_result = f'Error: Local tool {tool_name} not available (LOCAL_TOOLS_AVAILABLE=False)'
+                        logger.warning(f'   ⚠️  Local tools not available')
+                elif tool_name in LLM_TOOLS:
+                    # LLM-based tool - delegate to Coverity Assist
+                    tool_result = f'Tool {tool_name} is an LLM-based tool. Delegating to Coverity Assist.'
+                    logger.info(f'   ⚠️  LLM-based tool: {tool_name} (delegated)')
+                else:
+                    tool_result = f'Unknown tool: {tool_name}'
+                    logger.warning(f'   ⚠️  Unknown tool: {tool_name}')
+            except Exception as e:
+                tool_result = f'Error executing {tool_name}: {str(e)}'
+                logger.error(f'   ❌ Tool execution failed: {e}', exc_info=True)
+            
+            # Add tool result to messages
+            messages.append({
+                'role': 'tool',
+                'tool_call_id': tool_id,
+                'name': tool_name,
+                'content': tool_result
+            })
+    
+    # Max iterations reached
+    logger.warning(f'⚠️  Max iterations ({max_iterations}) reached, returning partial result')
+    return {
+        'response': f'Agent reached maximum iterations ({max_iterations}). Last response: {llm_response.get("response", "")}',
+        'tool_calls': all_tool_calls,
+        'iterations': iteration,
+        'max_iterations_reached': True
+    }
+
 
 
 def add_activity(activity_type: str, details: dict):

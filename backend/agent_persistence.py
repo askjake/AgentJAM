@@ -208,3 +208,55 @@ if __name__ == '__main__':
             print(f"   {table}: {count} entries")
     except Exception as e:
         print(f"❌ Database error: {e}")
+
+# Conversation Persistence Functions
+
+def save_conversation(chat_id: str, conversation: Dict):
+    """Save or update conversation"""
+    with get_db_connection() as conn:
+        conn.execute(
+            """INSERT OR REPLACE INTO conversations 
+               (chat_id, title, messages, created_at, updated_at, metadata)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                chat_id,
+                conversation["title"],
+                json.dumps(conversation["messages"]),
+                conversation["created_at"],
+                conversation["updated_at"],
+                json.dumps(conversation.get("metadata", {}))
+            )
+        )
+
+def load_conversations() -> Dict:
+    """Load all conversations from database"""
+    with get_db_connection() as conn:
+        cursor = conn.execute("SELECT * FROM conversations")
+        conversations = {}
+        for row in cursor.fetchall():
+            conversations[row["chat_id"]] = {
+                "chat_id": row["chat_id"],
+                "title": row["title"],
+                "messages": json.loads(row["messages"]),
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+                "metadata": json.loads(row["metadata"]) if row["metadata"] else {}
+            }
+        return conversations
+
+def delete_conversation(chat_id: str):
+    """Delete conversation from database"""
+    with get_db_connection() as conn:
+        conn.execute("DELETE FROM conversations WHERE chat_id = ?", (chat_id,))
+
+def get_conversation_stats() -> Dict:
+    """Get conversation statistics"""
+    with get_db_connection() as conn:
+        cursor = conn.execute(
+            """SELECT 
+                   COUNT(*) as total_conversations,
+                   SUM(json_array_length(messages)) as total_messages
+               FROM conversations"""
+        )
+        row = cursor.fetchone()
+        return {"total_conversations": row[0] if row else 0, "total_messages": row[1] if row and row[1] else 0}
