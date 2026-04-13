@@ -20,6 +20,8 @@ from collections import defaultdict
 from PIL import Image
 import agent_persistence as persist
 import io
+from artifact_relay import get_artifact_relay
+from implicit_tool_parser import enhance_response_with_implicit_tools
 
 # ============================================================================
 # 504 TIMEOUT MITIGATION MODULE (Deployed: 2026-04-06)
@@ -1947,6 +1949,54 @@ def build_enhanced_context(chat_id: str, reasoning_mode: bool) -> str:
 ### Available Tools:
 {chr(10).join(f"- {t['name']}" for t in TOOL_DEFINITIONS.values())}
 
+### 🔴 CRITICAL: Tool Usage Protocol
+
+**YOU MUST USE TOOLS - NOT WRITE CODE BLOCKS**
+
+When the user asks you to:
+- Execute commands → USE agent_run_shell tool IMMEDIATELY
+- Run Python code → USE agent_run_python tool IMMEDIATELY
+- Check hardware/devices → USE agent_run_shell with lsusb, ls /dev, etc.
+- Install software → USE agent_run_shell with appropriate package manager
+- Access files → USE agent_run_shell to read/write/list files
+
+**NEVER** write code in markdown blocks and expect it to run.
+**ALWAYS** invoke the actual tool.
+
+Example patterns:
+
+❌ WRONG:
+```bash
+hackrf_info
+```
+
+✅ CORRECT:
+Call agent_run_shell with command="hackrf_info"
+
+❌ WRONG:
+```python
+import subprocess
+subprocess.run(['hackrf_info'])
+```
+
+✅ CORRECT:
+Call agent_run_python with code containing the full script
+
+**When user says "use", "check", "run", "execute" → CALL A TOOL IMMEDIATELY**
+
+Do not:
+- Assume you don't have access to hardware
+- Claim you're "in the cloud" without checking
+- Offer workarounds before trying the direct approach
+- Write code without executing it
+
+Do:
+- Try first, explain later
+- Use tools immediately when requested
+- Check the actual environment (lsusb, ls /dev, which, etc.)
+- Report actual results, not assumptions
+
+
 ### Conversation History (Last {len(recent_msgs)} messages):
 """
     for msg in recent_msgs:
@@ -2148,6 +2198,14 @@ def agentic_loop(messages: list, reasoning_mode: bool = False, max_iterations: i
         
         # Call LLM
         llm_response = call_llm_with_tools(messages, reasoning_mode)
+
+        # IMPLICIT TOOL CALL DETECTION (fallback for LLMs without function calling)
+        # If LLM returned code blocks but no tool_calls, parse and execute them
+        llm_response = enhance_response_with_implicit_tools(
+            llm_response,
+            chat_id=None,  # Will use from context if available
+            auto_execute=True
+        )
         
         # Check for tool calls
         tool_calls = llm_response.get('tool_calls', [])
@@ -2337,7 +2395,7 @@ def list_artifacts_route(chat_id):
                 "path": str(rel_path),
                 "size": file_path.stat().st_size,
                 "size_human": format_file_size(file_path.stat().st_size),
-                "download_url": f"http://172.16.235.10:8000/api/artifacts/{chat_id}/{rel_path}"
+                "download_url": get_artifact_relay().base_url + f"/api/artifacts/{chat_id}/{rel_path}"
             })
     
     logger.info(f"📁 Listed {len(artifacts)} artifacts for chat {chat_id}")
@@ -2356,6 +2414,124 @@ def format_file_size(size_bytes):
             return f"{size_bytes:.1f} {unit}"
         size_bytes /= 1024.0
     return f"{size_bytes:.1f} TB"
+
+# ============================================================
+# ENHANCED ARTIFACT ENDPOINTS (Added 2026-04-13)
+# Addresses diagnostic report: chat_1776110680194_yutvyoaps
+# ============================================================
+
+@app.route('/api/artifacts/<chat_id>/<path:file_path>/enhanced', methods=['GET'])
+def get_artifact_enhanced(chat_id, file_path):
+    """
+    Get artifact with multiple delivery methods:
+    - local_url: Direct download from this server
+    - public_url: External cloud URL (if use_cloud=true)
+    - inline_base64: Base64 encoded data (for small images)
+    
+    Query params:
+        use_cloud: Upload to transfer.sh for external access (default: false)
+        inline: Generate base64 encoding (default: true)
+    """
+    import os
+    from pathlib import Path
+    
+    BASE_AGENT_WORKDIR = "/tmp/dish_chat_agent"
+    workspace = Path(BASE_AGENT_WORKDIR) / chat_id
+    
+    try:
+        use_cloud = request.args.get('use_cloud', 'false').lower() == 'true'
+        inline = request.args.get('inline', 'true').lower() == 'true'
+        
+        relay = get_artifact_relay()
+        artifact_url = relay.get_artifact_urls(
+            chat_id=chat_id,
+            rel_path=file_path,
+            workspace=workspace,
+            use_cloud=use_cloud,
+            inline_if_possible=inline
+        )
+        
+        response_data = relay.format_response(artifact_url)
+        
+        logger.info(f"📦 Enhanced artifact request: {file_path}")
+        logger.info(f"   Method: {response_data['method']}")
+        logger.info(f"   Size: {response_data['size_human']}")
+        logger.info(f"   Can inline: {response_data['can_inline']}")
+        logger.info(f"   Has public URL: {response_data['has_public_url']}")
+        
+        return jsonify(response_data)
+        
+    except FileNotFoundError as e:
+        logger.warning(f"❌ File not found: {file_path}")
+        return jsonify({"error": str(e)}), 404
+    except Exception as e:
+        logger.error(f"❌ Error processing artifact: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/artifacts/<chat_id>/list-enhanced', methods=['GET'])
+def list_artifacts_enhanced(chat_id):
+    """
+    Enhanced artifact listing with relay capabilities
+    
+    Query params:
+        use_cloud: Generate cloud URLs for all artifacts (default: false)
+        inline: Generate inline base64 for small images (default: true)
+    """
+    import os
+    from pathlib import Path
+    
+    BASE_AGENT_WORKDIR = "/tmp/dish_chat_agent"
+    workspace = Path(BASE_AGENT_WORKDIR) / chat_id
+    
+    if not workspace.exists():
+        return jsonify({"artifacts": [], "workspace": str(workspace), "exists": False})
+    
+    try:
+        use_cloud = request.args.get('use_cloud', 'false').lower() == 'true'
+        inline = request.args.get('inline', 'true').lower() == 'true'
+        
+        relay = get_artifact_relay()
+        artifacts = []
+        
+        for root, dirs, files in os.walk(workspace):
+            for file in files:
+                file_path = Path(root) / file
+                rel_path = file_path.relative_to(workspace)
+                
+                try:
+                    artifact_url = relay.get_artifact_urls(
+                        chat_id=chat_id,
+                        rel_path=str(rel_path),
+                        workspace=workspace,
+                        use_cloud=use_cloud,
+                        inline_if_possible=inline
+                    )
+                    
+                    artifact_data = relay.format_response(artifact_url)
+                    artifact_data['name'] = file
+                    artifact_data['path'] = str(rel_path)
+                    artifacts.append(artifact_data)
+                    
+                except Exception as e:
+                    logger.warning(f"Skipping {file}: {e}")
+                    continue
+        
+        logger.info(f"📁 Enhanced listing: {len(artifacts)} artifacts for {chat_id}")
+        
+        return jsonify({
+            "artifacts": artifacts,
+            "count": len(artifacts),
+            "workspace": str(workspace),
+            "exists": True,
+            "relay_base_url": relay.base_url
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error listing artifacts: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 
 
 
