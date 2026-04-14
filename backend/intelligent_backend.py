@@ -1351,6 +1351,34 @@ def chat_stream():
                         data_str = decoded[6:]
                         
                         if data_str == '[DONE]':
+
+                            # IMPLICIT TOOL DETECTION for streaming responses
+                            try:
+                                from implicit_tool_parser import detect_implicit_tool_calls
+                                tool_calls = detect_implicit_tool_calls(accumulated_content, chat_id)
+                                
+                                if tool_calls:
+                                    logger.info(f"📝 Streaming: Detected {len(tool_calls)} implicit tool calls")
+                                    
+                                    # Execute detected tools
+                                    for tool_call in tool_calls:
+                                        tool_name = tool_call.get("name")
+                                        tool_args = tool_call.get("arguments", {})
+                                        
+                                        if tool_name in LOCAL_TOOL_MAP:
+                                            try:
+                                                tool_func = LOCAL_TOOL_MAP[tool_name]
+                                                if tool_func:
+                                                    tool_result = str(tool_func(**tool_args))
+                                                    logger.info(f"🔧 Streaming: Executed {tool_name}")
+                                                    
+                                                    # Append result to accumulated content
+                                                    accumulated_content += f"\n\n<tool_response>\n{tool_result}\n</tool_response>"
+                                            except Exception as e:
+                                                logger.error(f"Tool execution error: {e}")
+                            except Exception as e:
+                                logger.error(f"Implicit tool detection error: {e}")
+
                             # Save complete message to conversation
                             conversations[chat_id]['messages'].append({
                                 'role': 'assistant',
