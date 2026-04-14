@@ -103,6 +103,7 @@ except Exception as e:
 
 
 # Phase 2: Complexity Monitoring
+from integrated_tools import execute_integrated_tool
 def monitor_request_complexity(user_message: str, conversation_history: list = None) -> dict:
     if not DECOMPOSER_MONITORING:
         return {"monitored": False}
@@ -1618,18 +1619,15 @@ def execute_tool_internal(tool_name: str, params: dict, chat_id: str = None) -> 
     # Execute LLM-based tools (internal_search, public_web_search, etc.)
     if tool_name == 'internal_search':
         # Call actual internal search
-        query = params.get('query', '')
-        top_k = params.get('top_k', 5)
-        return f"Internal search for '{query}' (top {top_k} results) - [Simulated: would search Confluence, JIRA, Git]"
+        return execute_integrated_tool('internal_search', params)
     
     elif tool_name == 'public_web_search':
-        query = params.get('query', '')
-        max_results = params.get('max_results', 6)
-        return f"Public web search for '{query}' (max {max_results} results) - [Simulated: would search via DuckDuckGo]"
+        # Call actual public web search
+        return execute_integrated_tool('public_web_search', params)
     
     elif tool_name == 'cluster_inspect':
-        task = params.get('task', '')
-        return f"Cluster inspection: {task} - [Simulated: would run kubectl commands]"
+        # Call actual cluster inspect
+        return execute_integrated_tool('cluster_inspect', params)
     
     else:
         raise Exception(f"Unknown tool: {tool_name}")
