@@ -17,6 +17,35 @@ from typing import List, Dict, Any
 
 logger = logging.getLogger(__name__)
 
+
+def normalize_tool_name(display_name: str) -> str:
+    """Convert display names to actual tool names"""
+    name_map = {
+        'shell execution': 'agent_run_shell',
+        'shell_execution': 'agent_run_shell',
+        'shell': 'agent_run_shell',
+        'bash': 'agent_run_shell',
+        'python execution': 'agent_run_python',
+        'python_execution': 'agent_run_python',
+        'python': 'agent_run_python',
+        'internal search': 'internal_search',
+        'search internal': 'internal_search',
+        'dish internal tools': 'internal_search',
+        'internal tools': 'internal_search',
+        'web search': 'public_web_search',
+        'search web': 'public_web_search',
+        'public search': 'public_web_search',
+        'public web search': 'public_web_search',
+        'search': 'public_web_search',
+        'cluster inspect': 'cluster_inspect',
+        'kubectl': 'cluster_inspect',
+        'kubernetes': 'cluster_inspect'
+    }
+    
+    normalized = display_name.lower().strip()
+    return name_map.get(normalized, display_name)
+
+
 def detect_implicit_tool_calls(response_text: str, chat_id: str = None) -> List[Dict[str, Any]]:
     """
     Parse markdown code blocks as implicit tool calls
@@ -41,12 +70,13 @@ def detect_implicit_tool_calls(response_text: str, chat_id: str = None) -> List[
 
     # First, detect Coverity Assist XML-style tool calls
     # Pattern: <tool_call>{"name": "agent_run_shell", "arguments": {"command": "..."}}</tool_call>
-    xml_tool_pattern = r'<tool_call>\s*(\{[^}]+\})\s*</tool_call>'
+    xml_tool_pattern = r'<tool_call>\s*(\{.+?\})\s*</tool_call>'
     
     for match in re.finditer(xml_tool_pattern, response_text, re.DOTALL):
         try:
             tool_data = json.loads(match.group(1))
-            tool_name = tool_data.get('name', '')
+            tool_name_raw = tool_data.get('name', '')
+            tool_name = normalize_tool_name(tool_name_raw)
             tool_args = tool_data.get('arguments', {})
             
             if tool_name:
@@ -57,7 +87,7 @@ def detect_implicit_tool_calls(response_text: str, chat_id: str = None) -> List[
                         'name': tool_name,
                         'arguments': json.dumps(tool_args)
                     },
-                    'arguments': tool_args,
+                    'parameters': tool_args,
                     'implicit': True,
                     'source': 'xml_parser'
                 })
@@ -99,7 +129,7 @@ def detect_implicit_tool_calls(response_text: str, chat_id: str = None) -> List[
                     'name': 'agent_run_shell',
                     'arguments': json.dumps({'command': command})
                 },
-                'arguments': {'command': command},
+                'parameters': {'command': command},
                 'implicit': True,
                 'source': 'markdown_parser'
             })
@@ -126,7 +156,7 @@ def detect_implicit_tool_calls(response_text: str, chat_id: str = None) -> List[
                 'name': 'agent_run_python',
                 'arguments': json.dumps(arguments)
             },
-            'arguments': arguments,
+            'parameters': arguments,
             'implicit': True,
             'source': 'markdown_parser'
         })

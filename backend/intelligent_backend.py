@@ -5,26 +5,20 @@ All endpoints required by enhanced frontend
 """
 import sys
 import os
-import base64
-import re
 import json
-import uuid
 import logging
+from implicit_tool_parser import detect_implicit_tool_calls, enhance_response_with_implicit_tools
 import requests
 import time
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
-from flask import Flask, request, jsonify, send_file, Response, stream_with_context
+from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from collections import defaultdict
-from PIL import Image
-import agent_persistence as persist
 import io
-from artifact_relay import get_artifact_relay
-from implicit_tool_parser import enhance_response_with_implicit_tools
 
 # ============================================================================
-# 504 TIMEOUT MITIGATION MODULE (Deployed: 2026-04-06)
+# 504 TIMEOUT MITIGATION MODULE (Added: 2026-04-06)
 # ============================================================================
 try:
     from enhanced_agent_504_mitigation import (
@@ -41,13 +35,13 @@ try:
     _adaptive_throttler = AdaptiveThrottler()
     
     MITIGATION_ENABLED = True
-    print('✅ 504 Timeout Mitigation: ENABLED')
+    print("✅ 504 Timeout Mitigation: ENABLED")
 except ImportError as e:
     MITIGATION_ENABLED = False
-    print(f'⚠️  504 Mitigation not available: {e}')
+    print(f"⚠️  504 Mitigation not available: {e}")
 except Exception as e:
     MITIGATION_ENABLED = False
-    print(f'❌ 504 Mitigation initialization failed: {e}')
+    print(f"❌ 504 Mitigation initialization failed: {e}")
 
 
 # ============================================================================
@@ -65,24 +59,19 @@ try:
     _sequential_orchestrator = SequentialOrchestrator()
     
     AUTO_DECOMPOSE_ENABLED = False
-    GUIDED_DECOMPOSE_ENABLED = True
     DECOMPOSER_MONITORING = True
     
     print('✅ Phase 2 Auto-Decomposer: MONITORING MODE ACTIVE')
     print('   - Complexity analysis: ENABLED')
     print('   - Auto-decomposition: DISABLED')
-    print('   - Guided decomposition: ENABLED (Phase 3)')
-    print('   - User confirmation: REQUIRED')
     
 except ImportError as e:
     DECOMPOSER_MONITORING = False
     AUTO_DECOMPOSE_ENABLED = False
-    GUIDED_DECOMPOSE_ENABLED = True
     print(f'⚠️  Auto-Decomposer not available: {e}')
 except Exception as e:
     DECOMPOSER_MONITORING = False
     AUTO_DECOMPOSE_ENABLED = False
-    GUIDED_DECOMPOSE_ENABLED = True
     print(f'❌ Auto-Decomposer init failed: {e}')
 
 
@@ -93,34 +82,6 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
-# ============================================================================
-# MESSAGE SUMMARIZATION MODULE
-# ============================================================================
-try:
-    from message_summarizer import (
-        MessageSummarizer,
-        AdaptiveMessageManager,
-        compress_conversation_history
-    )
-    
-    # Initialize adaptive message manager
-    _message_manager = AdaptiveMessageManager(max_context_tokens=16000)
-    MESSAGE_SUMMARIZATION_ENABLED = True
-    
-    print('✅ Message Summarization: ENABLED')
-    print('   - Strategy: Compress older messages, keep recent verbatim')
-    print('   - Recent window: 10 messages')
-    print('   - Compression window: 20 messages')
-    print('   - Adaptive context management: ACTIVE')
-    
-except ImportError as e:
-    MESSAGE_SUMMARIZATION_ENABLED = False
-    print(f'⚠️  Message Summarization not available: {e}')
-except Exception as e:
-    MESSAGE_SUMMARIZATION_ENABLED = False
-    print(f'❌ Message Summarization init failed: {e}')
-
-
 
 
 # Load environment variables from .env file
@@ -164,161 +125,6 @@ def monitor_request_complexity(user_message: str, conversation_history: list = N
         return {"monitored": False, "error": str(e)}
 
 
-
-# Phase 3: Guided Decomposition Functions
-def detect_confirmation(msg):
-    m = msg.lower().strip()
-    return any(w in m for w in ['yes', 'yeah', 'yep', 'sure', 'ok', 'okay', 'proceed', 'break it down'])
-
-def detect_denial(msg):
-    m = msg.lower().strip()
-    return any(w in m for w in ['no', 'nope', 'nah', 'dont', 'skip', 'normal'])
-
-def create_decomposition_proposal(analysis, user_msg):
-    level = analysis.get('complexity_level', 1)
-    ctype = analysis.get('complexity_type', 'unknown')
-    tasks = analysis.get('estimated_subtasks', 'several')
-    
-    return f"""REQUEST COMPLEXITY DETECTED
-    
-Complexity: Level {level}/5 ({ctype})
-Estimated subtasks: {tasks}
-Timeout risk: {"HIGH" if level >= 4 else "MEDIUM"}
-
-This request might timeout if processed all at once.
-
-I can break this into {tasks} smaller steps and execute them sequentially.
-
-Would you like me to decompose this request?
-- Reply 'yes' to break it down (recommended)
-- Reply 'no' to attempt all at once
-
-Your request: "{user_msg[:100]}{"..." if len(user_msg) > 100 else ""}"
-"""
-
-
-
-def execute_decomposed_subtasks(user_message, analysis, llm_function):
-    try:
-        subtasks = _intelligent_decomposer.decompose(user_message, analysis)
-        
-        if not subtasks:
-            logging.warning("Could not decompose")
-            return None
-        
-        logging.info(f"Decomposed into {len(subtasks)} subtasks")
-        
-        results = []
-        for i, subtask in enumerate(subtasks, 1):
-            task_desc = subtask.description[:60] if hasattr(subtask, 'description') else str(subtask)[:60]
-            logging.info(f"Executing {i}/{len(subtasks)}: {task_desc}")
-            
-            try:
-                response = llm_function(task_desc)
-                results.append({
-                    'num': i,
-                    'task': task_desc,
-                    'result': response,
-                    'success': True
-                })
-                logging.info(f"Subtask {i} complete")
-            except Exception as e:
-                logging.error(f"Subtask {i} failed: {e}")
-                results.append({
-                    'num': i,
-                    'task': task_desc,
-                    'error': str(e),
-                    'success': False
-                })
-        
-        successful = sum(1 for r in results if r.get('success'))
-        
-        synthesis = "DECOMPOSED EXECUTION COMPLETE\n"
-        synthesis += f"Completed {successful} of {len(results)} tasks successfully\n\n"
-        
-        for r in results:
-            status = "OK" if r.get('success') else "FAIL"
-            task_short = r['task'][:70]
-            synthesis += f"[{status}] Task {r['num']}: {task_short}\n"
-            if r.get('result'):
-                result_short = str(r['result'])[:200]
-                synthesis += f"  Result: {result_short}\n"
-        
-        return {
-            'success': True,
-            'results': results,
-            'synthesis': synthesis,
-            'total': len(results),
-            'successful': successful
-        }
-    except Exception as e:
-        logging.error(f"Execution failed: {e}")
-        return None
-
-
-
-def execute_decomposed_subtasks(user_message, analysis, llm_function):
-    try:
-        subtasks = _intelligent_decomposer.decompose(user_message, analysis)
-        
-        if not subtasks:
-            logging.warning("Could not decompose request")
-            return None
-        
-        num_tasks = len(subtasks)
-        logging.info(f"Decomposed into {num_tasks} subtasks")
-        
-        results = []
-        for i, subtask in enumerate(subtasks, 1):
-            task_desc = getattr(subtask, 'description', str(subtask))[:60]
-            logging.info(f"Executing {i}/{num_tasks}: {task_desc}")
-            
-            try:
-                response = llm_function(task_desc)
-                results.append({
-                    'num': i,
-                    'task': task_desc,
-                    'result': response,
-                    'success': True
-                })
-                logging.info(f"Subtask {i} complete")
-            except Exception as e:
-                logging.error(f"Subtask {i} failed: {e}")
-                results.append({
-                    'num': i,
-                    'task': task_desc,
-                    'error': str(e),
-                    'success': False
-                })
-        
-        successful = sum(1 for r in results if r.get('success'))
-        
-        parts = ["=== DECOMPOSED EXECUTION COMPLETE ===", ""]
-        parts.append(f"Completed {successful} of {len(results)} tasks successfully")
-        parts.append("")
-        
-        for r in results:
-            status = "OK" if r.get('success') else "FAIL"
-            task_short = r['task'][:70]
-            parts.append(f"{status} Task {r['num']}: {task_short}")
-            if r.get('result'):
-                result_short = str(r['result'])[:200]
-                parts.append(f"  Result: {result_short}")
-            parts.append("")
-        
-        synthesis = "\n".join(parts)
-        
-        return {
-            'success': True,
-            'results': results,
-            'synthesis': synthesis,
-            'total': len(results),
-            'successful': successful
-        }
-    except Exception as e:
-        logging.error(f"Decomposed execution failed: {e}")
-        return None
-
 app = Flask(__name__)
 CORS(app)
 
@@ -359,13 +165,13 @@ SETTINGS_CATALOG = {
                 "sensitive": True
             },
             "REQUEST_TIMEOUT": {
-                "default": int(os.getenv("REQUEST_TIMEOUT", "3600")),
+                "default": int(os.getenv("REQUEST_TIMEOUT", "60")),
                 "description": "HTTP request timeout (seconds)",
                 "type": "integer",
                 "category": "performance",
                 "user_editable": True,
                 "min": 10,
-                "max": 7200
+                "max": 600
             },
             "TOOL_EXECUTION_TIMEOUT": {
                 "default": int(os.getenv("TOOL_EXECUTION_TIMEOUT", "600")),
@@ -481,7 +287,7 @@ SETTINGS_CATALOG = {
                 "category": "performance",
                 "user_editable": True,
                 "min": 1000,
-                "max": 720000
+                "max": 60000
             }
         }
     }
@@ -576,54 +382,14 @@ def reset_setting(key: str) -> bool:
         return True
     return False
 
-@app.route('/api/settings', methods=['GET', 'POST'])
-def api_manage_all_settings():
-    """Get or save all settings"""
+@app.route('/api/settings', methods=['GET'])
+def api_get_settings():
+    """Get all settings"""
     try:
-        if request.method == "GET":
-            return jsonify(get_all_settings())
-        else:  # POST
-            data = request.get_json()
-            # Handle comprehensive settings update
-            if "settings" in data:
-                # Bulk update format
-                updates = data.get("settings", {})
-            else:
-                # Direct settings object
-                updates = data
-            
-            results = {"success": [], "failed": []}
-            
-            # Flatten nested settings if needed
-            flat_updates = {}
-            for key, value in updates.items():
-                if isinstance(value, dict):
-                    # Nested structure from settings page
-                    for section_name, section in value.items():
-                        if isinstance(section, dict):
-                            for setting_key, setting_data in section.items():
-                                if isinstance(setting_data, dict) and "value" in setting_data:
-                                    flat_updates[setting_key] = setting_data["value"]
-                                else:
-                                    flat_updates[setting_key] = setting_data
-                        else:
-                            flat_updates[section_name] = section
-                else:
-                    flat_updates[key] = value
-            
-            for key, value in flat_updates.items():
-                if set_setting(key, value):
-                    results["success"].append(key)
-                else:
-                    results["failed"].append(key)
-            
-            logger.info(f"Settings update: {len(results['success'])} succeeded, {len(results['failed'])} failed")
-            add_activity("settings_updated", {"success_count": len(results["success"]), "failed_count": len(results["failed"])})
-            
-            return jsonify(results)
+        return jsonify(get_all_settings())
     except Exception as e:
-        logger.error(f"Error managing settings: {e}")
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"Error getting settings: {e}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/settings/<key>', methods=['GET', 'PUT', 'DELETE'])
 def api_manage_setting(key: str):
@@ -745,20 +511,7 @@ def api_import_settings():
 
 
 # In-memory storage
-# Initialize persistence database
-try:
-    persist.init_database()
-    print('✅ Persistence database initialized')
-except Exception as e:
-    print(f'⚠️  Database initialization warning: {e}')
-
-# Load conversations from database
-try:
-    conversations = persist.load_conversations()
-    print(f"✅ Loaded {len(conversations)} conversations from database")
-except Exception as e:
-    print(f"⚠️  Could not load conversations: {e}")
-    conversations = {}
+conversations = {}
 journal_entries = []
 tool_usage_log = []
 response_times = []
@@ -777,15 +530,6 @@ methodology_rules = {
     }
 }
 
-# Load rules from database or use defaults
-try:
-    loaded_rules = persist.load_methodology_rules()
-    if loaded_rules:
-        methodology_rules.update(loaded_rules)
-        print(f'✅ Loaded {len(loaded_rules)} methodology rules from database')
-except Exception as e:
-    print(f'⚠️  Could not load rules: {e}')
-
 # Tool definitions
 TOOL_DEFINITIONS = {
     'internal_search': {'name': 'Internal Search', 'category': 'search'},
@@ -799,321 +543,100 @@ TOOL_DEFINITIONS = {
     'get_popular_services': {'name': 'Popular Services', 'category': 'analytics'}
 }
 
+# Anthropic-format tool definitions for Claude
+ANTHROPIC_TOOLS = [
+    {
+        "name": "internal_search",
+        "description": "Search DISH internal systems (Confluence, JIRA, Git, etc.) for company-specific information, documentation, tickets, code, and internal knowledge.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The search query for internal systems"
+                },
+                "top_k": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return (default: 5)",
+                    "default": 5
+                }
+            },
+            "required": ["query"]
+        }
+    },
+    {
+        "name": "public_web_search",
+        "description": "Search the public internet for current information like news, weather, prices, stock quotes, recent events, current statistics, or any information that changes frequently. NEVER include proprietary company information, internal system names, or confidential data in search queries.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The search query (sanitized, no proprietary info)"
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum number of results (default: 6)",
+                    "default": 6
+                }
+            },
+            "required": ["query"]
+        }
+    },
+    {
+        "name": "cluster_inspect",
+        "description": "Run read-only Kubernetes cluster inspections via curated commands. Can list pods, deployments, services, namespaces, check logs, describe resources, etc.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task": {
+                    "type": "string",
+                    "description": "The inspection task to perform (e.g., 'list pods in sentry', 'describe pod X in namespace Y', 'logs from pod Z')"
+                }
+            },
+            "required": ["task"]
+        }
+    },
+    {
+        "name": "agent_run_python",
+        "description": "Execute Python code in a sandboxed environment. Useful for data analysis, calculations, file processing, API interactions, etc.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string",
+                    "description": "The Python code to execute"
+                },
+                "chat_id": {
+                    "type": "string",
+                    "description": "Workspace identifier for this session"
+                }
+            },
+            "required": ["code", "chat_id"]
+        }
+    },
+    {
+        "name": "agent_run_shell",
+        "description": "Run shell commands (kubectl, helm, aws, git, ls, cat, grep, find). Use for infrastructure inspection and management.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "The shell command to execute"
+                }
+            },
+            "required": ["command"]
+        }
+    }
+]
+
+
 start_time = datetime.utcnow()
 
 # ==============================================================================
 # CHAT ENDPOINTS
-# ============================================================import base64
-import io
-import re
-from PIL import Image
-import logging
-
-logger = logging.getLogger(__name__)
-# ============================================================================
-
-def extract_database_info(base64_data: str, filename: str) -> str:
-    """
-    Extract schema and sample data from SQLite database file.
-    Returns formatted text suitable for LLM consumption.
-    """
-    import sqlite3
-    import tempfile as tmp
-    import os
-    
-    try:
-        # Decode base64 to bytes
-        # Clean base64 string
-        import string
-        valid_chars = string.ascii_letters + string.digits + "+/="
-        cleaned_base64 = "".join(c for c in base64_data if c in valid_chars)
-        db_bytes = base64.b64decode(cleaned_base64)
-        db_size_kb = len(db_bytes) / 1024
-        
-        logger.info(f"📊 Processing database: {filename} ({db_size_kb:.1f}KB)")
-        
-        # Create temporary file
-        with tmp.NamedTemporaryFile(delete=False, suffix='.db') as temp_file:
-            temp_file.write(db_bytes)
-            temp_path = temp_file.name
-        
-        try:
-            # Connect to database (read-only)
-            conn = sqlite3.connect(f'file:{temp_path}?mode=ro', uri=True)
-            cursor = conn.cursor()
-            
-            # Get list of tables
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;")
-            tables = [row[0] for row in cursor.fetchall()]
-            
-            if not tables:
-                return f"DATABASE FILE: {filename}\nSize: {db_size_kb:.1f} KB\n\n⚠️  Database is empty (no tables found)"
-            
-            # Build formatted output
-            output_parts = []
-            output_parts.append(f"DATABASE FILE: {filename}")
-            output_parts.append(f"Size: {db_size_kb:.1f} KB")
-            output_parts.append(f"Tables: {len(tables)}")
-            output_parts.append("")
-            
-            # Limit to first 20 tables
-            tables_to_process = tables[:20]
-            if len(tables) > 20:
-                output_parts.append(f"⚠️  Showing first 20 of {len(tables)} tables")
-                output_parts.append("")
-            
-            # Process each table
-            for table_name in tables_to_process:
-                try:
-                    output_parts.append(f"TABLE: {table_name}")
-                    output_parts.append("-" * 60)
-                    
-                    # Get schema
-                    cursor.execute(f"SELECT sql FROM sqlite_master WHERE type='table' AND name=?;", (table_name,))
-                    schema = cursor.fetchone()
-                    if schema and schema[0]:
-                        output_parts.append("Schema:")
-                        output_parts.append(f"  {schema[0]}")
-                    
-                    # Get row count
-                    cursor.execute(f"SELECT COUNT(*) FROM `{table_name}`;")
-                    row_count = cursor.fetchone()[0]
-                    output_parts.append(f"Row Count: {row_count:,}")
-                    
-                    # Get sample data (first 5 rows)
-                    if row_count > 0:
-                        cursor.execute(f"SELECT * FROM `{table_name}` LIMIT 5;")
-                        sample_rows = cursor.fetchall()
-                        
-                        # Get column names
-                        cursor.execute(f"PRAGMA table_info(`{table_name}`);")
-                        columns = [col[1] for col in cursor.fetchall()]
-                        
-                        output_parts.append("\nSample Data (first 5 rows):")
-                        output_parts.append("  Columns: " + " | ".join(columns))
-                        for row in sample_rows:
-                            row_str = " | ".join(str(val) if val is not None else "NULL" for val in row)
-                            output_parts.append(f"  {row_str}")
-                    
-                    output_parts.append("")
-                    
-                except Exception as table_error:
-                    output_parts.append(f"  ⚠️  Error processing table: {table_error}")
-                    output_parts.append("")
-            
-            conn.close()
-            os.unlink(temp_path)
-            
-            result = "\n".join(output_parts)
-            logger.info(f"✅ Database processed: {len(tables)} tables")
-            return result
-            
-        except Exception as db_error:
-            if os.path.exists(temp_path):
-                os.unlink(temp_path)
-            logger.error(f"❌ Database error: {db_error}")
-            return f"DATABASE FILE: {filename}\nSize: {db_size_kb:.1f} KB\n\n❌ Error: {str(db_error)}"
-    
-    except Exception as e:
-        logger.error(f"❌ Failed to process database: {e}")
-        return f"DATABASE FILE: {filename}\n\n❌ Error: {str(e)}"
-
-
-def compress_image_if_needed(base64_data: str, media_type: str, max_size_kb: int = 800) -> tuple:
-    """
-    Compress image if it exceeds max_size_kb
-    Returns: (compressed_base64_data, new_media_type, was_compressed)
-    """
-    try:
-        # Decode base64 to bytes
-        image_bytes = base64.b64decode(base64_data)
-        current_size_kb = len(image_bytes) / 1024
-        
-        logger.info(f"Image size: {current_size_kb:.1f}KB (limit: {max_size_kb}KB)")
-        
-        # If under limit, return as-is
-        if current_size_kb <= max_size_kb:
-            logger.info("✅ Image within size limit, no compression needed")
-            return base64_data, media_type, False
-        
-        # Open image with PIL
-        img = Image.open(io.BytesIO(image_bytes))
-        original_format = img.format or 'JPEG'
-        
-        logger.info(f"🔄 Compressing {original_format} image ({img.size[0]}x{img.size[1]})")
-        
-        # Convert RGBA to RGB if needed
-        if img.mode == 'RGBA':
-            background = Image.new('RGB', img.size, (255, 255, 255))
-            background.paste(img, mask=img.split()[3])
-            img = background
-        elif img.mode not in ('RGB', 'L'):
-            img = img.convert('RGB')
-        
-        # Start with max dimensions of 1920x1920 (good for vision models)
-        max_dimension = 1920
-        if max(img.size) > max_dimension:
-            ratio = max_dimension / max(img.size)
-            new_size = tuple(int(dim * ratio) for dim in img.size)
-            img = img.resize(new_size, Image.Resampling.LANCZOS)
-            logger.info(f"📐 Resized to {img.size[0]}x{img.size[1]}")
-        
-        # Try progressive quality reduction
-        for quality in [85, 75, 65, 55, 45]:
-            buffer = io.BytesIO()
-            img.save(buffer, format='JPEG', quality=quality, optimize=True)
-            compressed_bytes = buffer.getvalue()
-            compressed_size_kb = len(compressed_bytes) / 1024
-            
-            logger.info(f"📊 Quality {quality}: {compressed_size_kb:.1f}KB")
-            
-            if compressed_size_kb <= max_size_kb:
-                compressed_base64 = base64.b64encode(compressed_bytes).decode('utf-8')
-                logger.info(f"✅ Compressed {current_size_kb:.1f}KB → {compressed_size_kb:.1f}KB (quality={quality})")
-                return compressed_base64, 'image/jpeg', True
-        
-        # If still too large, use the last attempt
-        compressed_base64 = base64.b64encode(compressed_bytes).decode('utf-8')
-        final_size_kb = len(compressed_bytes) / 1024
-        logger.warning(f"⚠️ Compressed to minimum: {final_size_kb:.1f}KB (may still be large)")
-        return compressed_base64, 'image/jpeg', True
-        
-    except Exception as e:
-        logger.error(f"❌ Compression failed: {e}")
-        return base64_data, media_type, False
-
-
-def process_messages_with_attachments(messages: list, attachments: list) -> list:
-    """Enhanced version with image compression"""
-    logger.info(f'🔄 process_messages_with_attachments called with {len(messages)} messages, {len(attachments)} attachments')
-    
-    enhanced_messages = []
-    for msg in messages:
-        if msg.get('role') == 'user':
-            msg_attachments = attachments if msg == messages[-1] else []
-            if msg_attachments:
-                content_parts = []
-                text_content = msg.get('content', '')
-                if text_content:
-                    content_parts.append({'type': 'text', 'text': text_content})
-                
-                for attachment in msg_attachments:
-                    try:
-                        
-                        att_name = attachment.get('name', 'unknown')
-                        att_type = attachment.get('type', 'unknown')
-                        is_image = attachment.get('isImage', False)
-                        att_content = attachment.get('content', '')
-                        
-                        # Handle IMAGES
-                        if is_image:
-                            match = re.match(r'data:([^;]+);base64,(.+)', att_content)
-                            if match:
-                                media_type = match.group(1)
-                                image_data = match.group(2)
-                                
-                                # Compress if needed
-                                compressed_data, new_media_type, was_compressed = compress_image_if_needed(
-                                    image_data, media_type, max_size_kb=800
-                                )
-                                
-                                status = "🗜️ (compressed)" if was_compressed else "✅ (original)"
-                                logger.info(f"Added image: {att_name} {status}")
-                                
-                                content_parts.append({
-                                    'type': 'image',
-                                    'source': {
-                                        'type': 'base64',
-                                        'media_type': new_media_type,
-                                        'data': compressed_data
-                                    }
-                                })
-                        
-                        # Handle DATABASE FILES (.db, .sqlite, .sqlite3)
-                        elif att_name.lower().endswith(('.db', '.sqlite', '.sqlite3')):
-                            logger.info(f"🗄️  Processing database file: {att_name}")
-                            
-                            # Extract base64 data
-                            db_base64 = None
-                            match = re.match(r'data:([^;]+);base64,(.+)', att_content)
-                            if match:
-                                db_base64 = match.group(2)
-                            else:
-                                db_base64 = att_content
-                            
-                            # Extract database info
-                            db_info = extract_database_info(db_base64, att_name)
-                            
-                            # Add to content
-                            db_text = f"\n📊 Database File: {att_name}\n```\n{db_info}\n```\n"
-                            content_parts.append({'type': 'text', 'text': db_text})
-                            logger.info(f"  ✅ Added database file: {att_name}")
-                        
-
-                        # Handle TEXT FILES - ROBUST FALLBACK
-                        else:
-                            logger.info(f"📄 Processing text file: {att_name}")
-                            
-                            decoded_text = None
-                            decode_method = None
-                            
-                            # METHOD 1: Try data URI format (data:mime;base64,data)
-                            match = re.match(r'data:([^;]+);base64,(.+)', att_content)
-                            if match:
-                                try:
-                                    encoded_data = match.group(2)
-                                    decoded_text = base64.b64decode(encoded_data).decode('utf-8')
-                                    decode64_method = "data_uri"
-                                    logger.info(f"  ✅ Decoded via data URI format")
-                                except Exception as e:
-                                    logger.warning(f"  ⚠️  Data URI decode failed: {e}")
-                            
-                            # METHOD 2: Try pure base64 (no prefix)
-                            if decoded_text is None:
-                                try:
-                                    decoded_text = base64.b64decode(att_content).decode('utf-8')
-                                    decode_method = "pure_base64"
-                                    logger.info(f"  ✅ Decoded as pure base64")
-                                except Exception as e:
-                                    logger.debug(f"  Pure base64 decode failed: {e}")
-                            
-                            # METHOD 3: Use as-is (already plain text)
-                            if decoded_text is None:
-                                decoded_text = att_content
-                                decode_method = "plain_text"
-                                logger.info(f"  ✅ Using content as plain text")
-                            
-                            # Process the decoded text
-                            if decoded_text:
-                                max_chars = 50000
-                                original_length = len(decoded_text)
-                                
-                                if original_length > max_chars:
-                                    decoded_text = decoded_text[:max_chars] + "\n... (truncated)"
-                                    logger.info(f"  📏 Truncated from {original_length} to {max_chars} chars")
-                                
-                                text_with_context = f"\n📎 File: {att_name}\n```\n{decoded_text}\n```\n"
-                                content_parts.append({'type': 'text', 'text': text_with_context})
-                                logger.info(f"  ✅ Added text file: {att_name} ({len(decoded_text)} chars, method={decode_method})")
-                            else:
-                                logger.error(f"  ❌ Failed to decode {att_name} with all methods")
-                    except Exception as e:
-                        logger.error(f"Error processing attachment: {e}")
-                
-                if len(content_parts) > 1:
-                    enhanced_messages.append({'role': 'user', 'content': content_parts})
-                elif content_parts:
-                    enhanced_messages.append({'role': 'user', 'content': content_parts[0].get('text', msg.get('content', ''))})
-                else:
-                    enhanced_messages.append(msg)
-            else:
-                enhanced_messages.append(msg)
-        else:
-            enhanced_messages.append(msg)
-    
-    return enhanced_messages
-
-
+# ==============================================================================
 
 @app.route('/api/chat', methods=['POST', 'OPTIONS'])
 def chat():
@@ -1126,23 +649,6 @@ def chat():
     try:
         data = request.get_json()
         messages = data.get('messages', [])
-        attachments = data.get('attachments', [])
-        
-        # Debug: Log attachment info
-        if attachments:
-            logger.info(f'📎 Received {len(attachments)} attachments')
-            for att in attachments:
-                logger.info(f'  - {att.get("name", "unknown")} ({att.get("type", "unknown")}), isImage: {att.get("isImage", False)}')
-        else:
-            logger.info('No attachments in request')
-        
-        # Debug: Log attachment info
-        if attachments:
-            logger.info(f'📎 Received {len(attachments)} attachments')
-            for att in attachments:
-                logger.info(f'  - {att.get("name", "unknown")} ({att.get("type", "unknown")}), isImage: {att.get("isImage", False)}')
-        else:
-            logger.info('No attachments in request')
         reasoning_mode = data.get('reasoning_mode', False)
         chat_id = data.get('chat_id', f'chat_{int(datetime.utcnow().timestamp())}_{generate_id()}')
         
@@ -1181,15 +687,11 @@ def chat():
         context = build_enhanced_context(chat_id, reasoning_mode)
         
         # Call LLM
-        # Process attachments for vision
-        processed_messages = process_messages_with_attachments(messages, attachments)
-        
-        # Build enhanced messages with context
         enhanced_messages = [
             {'role': 'system', 'content': context}
-        ] + processed_messages
+        ] + messages
         
-        llm_response = agentic_loop(enhanced_messages, reasoning_mode, max_iterations=10)
+        llm_response = call_llm_with_tools(enhanced_messages, reasoning_mode, chat_id)
         
         # Save assistant response
         conversations[chat_id]['messages'].append({
@@ -1200,12 +702,6 @@ def chat():
         })
         
         conversations[chat_id]['updated_at'] = datetime.utcnow().isoformat()
-
-        # Persist conversation to database
-        try:
-            persist.save_conversation(chat_id, conversations[chat_id])
-        except Exception as e:
-            logger.error(f'Failed to persist conversation {chat_id}: {e}')
         
         # Track response time
         response_time = (datetime.utcnow() - start).total_seconds()
@@ -1229,7 +725,6 @@ def chat():
                 'timestamp': datetime.utcnow().isoformat()
             }
             journal_entries.append(journal_entry)
-            persist.save_journal_entry(journal_entry)  # Persist to database
         
         return jsonify({
             'response': llm_response.get('response', ''),
@@ -1254,189 +749,127 @@ def chat():
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/chat/stream', methods=['POST'])
+
+@app.route('/api/chat/stream', methods=['POST', 'OPTIONS'])
 def chat_stream():
-    """Stream chat responses using SSE (relay from Coverity Assist)"""
+    """Streaming chat endpoint with Server-Sent Events"""
+    if request.method == 'OPTIONS':
+        response = app.make_response(('', 200))
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+        return response
+    
     start = datetime.utcnow()
     
-    try:
-        data = request.get_json()
-        messages = data.get('messages', [])
-        chat_id = data.get('chat_id', str(uuid.uuid4()))
-        reasoning_mode = data.get('reasoning_mode', False)
-        attachments = data.get('attachments', [])
-        
-        if not messages:
-            return jsonify({'error': 'No messages provided'}), 400
-        
-        # Initialize conversation
-        if chat_id not in conversations:
-            conversations[chat_id] = {
-                'chat_id': chat_id,
-                'title': 'New Conversation',
-                'messages': [],
-                'created_at': datetime.utcnow().isoformat(),
-                'updated_at': datetime.utcnow().isoformat()
-            }
-        
-        # Get last user message for saving
-        last_user_msg = ""
-        for msg in reversed(messages):
-            if msg.get('role') == 'user':
-                last_user_msg = msg.get('content', '')
-                break
-        
-        # Set title from first message
-        if len(conversations[chat_id]['messages']) == 0 and last_user_msg:
-            conversations[chat_id]['title'] = last_user_msg[:50] + ('...' if len(last_user_msg) > 50 else '')
-        
-        # Save user message
-        conversations[chat_id]['messages'].append({
-            'role': 'user',
-            'content': last_user_msg,
-            'timestamp': datetime.utcnow().isoformat()
-        })
-        
-        # Build context
-        context = build_enhanced_context(chat_id, reasoning_mode)
-        
-        # Process attachments
-        processed_messages = process_messages_with_attachments(messages, attachments)
-        
-        # Build enhanced messages
-        enhanced_messages = [
-            {'role': 'system', 'content': context}
-        ] + processed_messages
-        
-        def generate():
-            """Generate SSE events by relaying from Coverity Assist"""
-            try:
-                headers = {'Content-Type': 'application/json'}
-                if COVERITY_ASSIST_TOKEN:
-                    headers['Authorization'] = f'Bearer {COVERITY_ASSIST_TOKEN}'
-                
-                # Call Coverity Assist streaming endpoint
-                stream_url = COVERITY_ASSIST_URL.replace('/chat', '/chat/stream')
-                logger.info(f"Streaming from: {stream_url}")
-                
-                response = requests.post(
-                    stream_url,
-                    headers=headers,
-                    json={
-                        'messages': enhanced_messages,
-                        'reasoning_mode': reasoning_mode,
-                        'inference_profile_arn': get_model_arn(reasoning_mode),
-                        'max_tokens': 128000 if reasoning_mode else 8192,
-                        #'tools': format_tools_for_llm()  # DISABLED: Let implicit parser handle tool execution locally
-                    },
-                    stream=True,
-                    timeout=3600
-                )
-                
-                if response.status_code != 200:
-                    yield f"data: {json.dumps({'type': 'error', 'error': f'HTTP {response.status_code}'})}\n\n"
-                    return
-                
-                accumulated_content = ""
-                metadata = {}
-                
-                # Relay events from Coverity Assist
-                for line in response.iter_lines():
-                    if not line:
-                        continue
-                    
-                    decoded = line.decode('utf-8')
-                    
-                    if decoded.startswith('data: '):
-                        data_str = decoded[6:]
-                        
-                        if data_str == '[DONE]':
-
-                            # IMPLICIT TOOL DETECTION for streaming responses
-                            try:
-                                from implicit_tool_parser import detect_implicit_tool_calls
-                                tool_calls = detect_implicit_tool_calls(accumulated_content, chat_id)
-                                
-                                if tool_calls:
-                                    logger.info(f"📝 Streaming: Detected {len(tool_calls)} implicit tool calls")
-                                    
-                                    # Execute detected tools
-                                    for tool_call in tool_calls:
-                                        tool_name = tool_call.get("name")
-                                        tool_args = tool_call.get("arguments", {})
-                                        
-                                        if tool_name in LOCAL_TOOL_MAP:
-                                            try:
-                                                tool_func = LOCAL_TOOL_MAP[tool_name]
-                                                if tool_func:
-                                                    tool_result = str(tool_func(**tool_args))
-                                                    logger.info(f"🔧 Streaming: Executed {tool_name}")
-                                                    
-                                                    # Append result to accumulated content
-                                                    accumulated_content += f"\n\n<tool_response>\n{tool_result}\n</tool_response>"
-                                            except Exception as e:
-                                                logger.error(f"Tool execution error: {e}")
-                            except Exception as e:
-                                logger.error(f"Implicit tool detection error: {e}")
-
-                            # Save complete message to conversation
-                            conversations[chat_id]['messages'].append({
-                                'role': 'assistant',
-                                'content': accumulated_content,
-                                'timestamp': datetime.utcnow().isoformat(),
-                                'metadata': metadata
-                            })
-                            conversations[chat_id]['updated_at'] = datetime.utcnow().isoformat()
-                            
-                            # Persist conversation to database
-                            try:
-                                persist.save_conversation(chat_id, conversations[chat_id])
-                            except Exception as e:
-                                logger.error(f'Failed to persist conversation {chat_id}: {e}')
-                            
-                            # Log activity
-                            add_activity('chat_message_stream', {
-                                'chat_id': chat_id,
-                                'message_length': len(accumulated_content),
-                                'duration_ms': int((datetime.utcnow() - start).total_seconds() * 1000)
-                            })
-                            
-                            yield f"data: {json.dumps({'type': 'done', 'chat_id': chat_id})}\n\n"
-                            yield "data: [DONE]\n\n"
-                        else:
-                            try:
-                                event_data = json.loads(data_str)
-                                
-                                if event_data.get('type') == 'token':
-                                    accumulated_content += event_data.get('content', '')
-                                elif event_data.get('type') == 'metadata':
-                                    metadata = event_data.get('usage', {})
-                                
-                                yield f"data: {json.dumps(event_data)}\n\n"
-                            except json.JSONDecodeError as e:
-                                logger.error(f"JSON decode error: {e}")
-                                pass
-                
-            except requests.exceptions.Timeout:
-                logger.error("Stream timeout")
-                yield f"data: {json.dumps({'type': 'error', 'error': 'Request timeout'})}\n\n"
-            except Exception as e:
-                logger.error(f"Stream error: {e}", exc_info=True)
-                yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
-        
-        return Response(
-            stream_with_context(generate()),
-            mimetype='text/event-stream',
-            headers={
-                'Cache-Control': 'no-cache',
-                'X-Accel-Buffering': 'no',
-                'Connection': 'keep-alive'
-            }
-        )
+    # Get request data BEFORE generator function
+    data = request.get_json()
+    messages = data.get('messages', [])
+    reasoning_mode = data.get('reasoning_mode', False)
+    chat_id = data.get('chat_id', f'chat_{int(datetime.utcnow().timestamp())}_{generate_id()}')
     
-    except Exception as e:
-        logger.error(f"Chat stream error: {e}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
+    if not messages:
+        return jsonify({'error': 'No messages provided'}), 400
+    
+    def generate():
+        try:
+            # Initialize conversation
+            if chat_id not in conversations:
+                conversations[chat_id] = {
+                    'chat_id': chat_id,
+                    'title': 'New Conversation',
+                    'messages': [],
+                    'created_at': datetime.utcnow().isoformat(),
+                    'updated_at': datetime.utcnow().isoformat()
+                }
+            
+            # Get last user message
+            last_user_msg = ""
+            for msg in reversed(messages):
+                if msg.get('role') == 'user':
+                    last_user_msg = msg.get('content', '')
+                    break
+            
+            # Set title from first message
+            if len(conversations[chat_id]['messages']) == 0 and last_user_msg:
+                conversations[chat_id]['title'] = last_user_msg[:50] + ('...' if len(last_user_msg) > 50 else '')
+            
+            # Save user message
+            conversations[chat_id]['messages'].append({
+                'role': 'user',
+                'content': last_user_msg,
+                'timestamp': datetime.utcnow().isoformat()
+            })
+            
+            # Send initial event
+            yield f'data: {json.dumps({"type": "start", "chat_id": chat_id})}\n\n'
+            
+            # Build context
+            context = build_enhanced_context(chat_id, reasoning_mode)
+            
+            # Call LLM (non-streaming for now, but send in chunks)
+            enhanced_messages = [
+                {'role': 'system', 'content': context}
+            ] + messages
+            
+            yield f'data: {json.dumps({"type": "thinking"})}\n\n'
+            
+            llm_response = call_llm_with_tools(enhanced_messages, reasoning_mode, chat_id)
+            
+            # Stream the response in chunks
+            response_text = llm_response.get('response', '')
+            chunk_size = 20  # Characters per chunk
+            
+            for i in range(0, len(response_text), chunk_size):
+                chunk = response_text[i:i+chunk_size]
+                yield f'data: {json.dumps({"type": "token", "content": chunk})}\n\n'
+            
+            # Save assistant response
+            conversations[chat_id]['messages'].append({
+                'role': 'assistant',
+                'content': response_text,
+                'timestamp': datetime.utcnow().isoformat(),
+                'tool_calls': llm_response.get('tool_calls', [])
+            })
+            
+            conversations[chat_id]['updated_at'] = datetime.utcnow().isoformat()
+            
+            # Track response time
+            response_time = (datetime.utcnow() - start).total_seconds()
+            response_times.append({
+                'timestamp': datetime.utcnow().isoformat(),
+                'duration': response_time
+            })
+            
+            # Log activity
+            add_activity('chat_message', {
+                'chat_id': chat_id,
+                'message_length': len(last_user_msg)
+            })
+            
+            # Self-reflection every 10 messages
+            if len(conversations[chat_id]['messages']) % 10 == 0:
+                journal_entry = {
+                    'type': 'reflection',
+                    'chat_id': chat_id,
+                    'content': f"Reflected on conversation after {len(conversations[chat_id]['messages'])} messages",
+                    'timestamp': datetime.utcnow().isoformat()
+                }
+                journal_entries.append(journal_entry)
+            
+            # Send completion event
+            yield f'data: {json.dumps({"type": "done", "chat_id": chat_id, "tool_calls": llm_response.get("tool_calls", []), "model": "intelligent-agent", "device": os.uname().nodename})}\n\n'
+            
+        except Exception as e:
+            logger.error(f"Stream error: {e}", exc_info=True)
+            yield f'data: {json.dumps({"type": "error", "error": str(e)})}\n\n'
+    
+    response = app.response_class(generate(), mimetype='text/event-stream')
+    response.headers['Cache-Control'] = 'no-cache'
+    response.headers['X-Accel-Buffering'] = 'no'
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    return response
+
 
 @app.route('/api/conversations', methods=['GET'])
 def list_conversations():
@@ -1469,7 +902,6 @@ def manage_conversation(chat_id: str):
         if request.method == 'DELETE':
             if chat_id in conversations:
                 del conversations[chat_id]
-                persist.delete_conversation(chat_id)
                 add_activity('conversation_deleted', {'chat_id': chat_id})
                 return jsonify({'success': True})
             return jsonify({'error': 'Conversation not found'}), 404
@@ -1842,6 +1274,31 @@ def get_doc(doc_id: str):
 # SETTINGS ENDPOINTS
 # ==============================================================================
 
+@app.route('/api/settings', methods=['GET', 'POST'])
+def manage_settings():
+    """Get or update settings"""
+    try:
+        if request.method == 'GET':
+            settings = {
+                'backend_url': CONFIG.API_BASE_URL if hasattr(globals(), 'CONFIG') else 'http://localhost:8000',
+                'reasoning_mode_default': False,
+                'theme': 'light',
+                'auto_save': True
+            }
+            return jsonify(settings)
+        else:
+            settings = request.get_json()
+            # In production, persist to database or config file
+            return jsonify({'success': True, 'settings': settings})
+        
+    except Exception as e:
+        logger.error(f"Settings error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# ==============================================================================
+# STATISTICS & STATUS ENDPOINTS
+# ==============================================================================
+
 @app.route('/api/statistics', methods=['GET'])
 def get_statistics():
     """Get comprehensive statistics"""
@@ -1931,28 +1388,7 @@ def build_enhanced_context(chat_id: str, reasoning_mode: bool) -> str:
     """Build context with memory and methodology"""
     conv = conversations.get(chat_id, {'messages': []})
     msg_count = len(conv['messages'])
-    # === MESSAGE SUMMARIZATION ===
-    if MESSAGE_SUMMARIZATION_ENABLED and msg_count > 10:
-        try:
-            # Use adaptive message manager to compress history
-            compressed_messages, compression_metadata = _message_manager.manage_context(
-                conv['messages']
-            )
-            recent_msgs = compressed_messages
-            
-            logger.info(
-                f"📊 Context management: {compression_metadata['original_message_count']} → "
-                f"{compression_metadata['compressed_message_count']} messages "
-                f"({compression_metadata['compression_level']} compression, "
-                f"~{compression_metadata.get('tokens_saved', 0)} tokens saved)"
-            )
-        except Exception as e:
-            logger.error(f"Summarization failed, falling back to last 10: {e}")
-            recent_msgs = conv['messages'][-10:]
-    else:
-        # Fallback to traditional approach
-        recent_msgs = conv['messages'][-10:]
-    # === END SUMMARIZATION ===
+    recent_msgs = conv['messages'][-10:]
     
     context = f"""You are an intelligent, self-improving AI assistant with full memory.
 
@@ -1977,54 +1413,6 @@ def build_enhanced_context(chat_id: str, reasoning_mode: bool) -> str:
 ### Available Tools:
 {chr(10).join(f"- {t['name']}" for t in TOOL_DEFINITIONS.values())}
 
-### 🔴 CRITICAL: Tool Usage Protocol
-
-**YOU MUST USE TOOLS - NOT WRITE CODE BLOCKS**
-
-When the user asks you to:
-- Execute commands → USE agent_run_shell tool IMMEDIATELY
-- Run Python code → USE agent_run_python tool IMMEDIATELY
-- Check hardware/devices → USE agent_run_shell with lsusb, ls /dev, etc.
-- Install software → USE agent_run_shell with appropriate package manager
-- Access files → USE agent_run_shell to read/write/list files
-
-**NEVER** write code in markdown blocks and expect it to run.
-**ALWAYS** invoke the actual tool.
-
-Example patterns:
-
-❌ WRONG:
-```bash
-hackrf_info
-```
-
-✅ CORRECT:
-Call agent_run_shell with command="hackrf_info"
-
-❌ WRONG:
-```python
-import subprocess
-subprocess.run(['hackrf_info'])
-```
-
-✅ CORRECT:
-Call agent_run_python with code containing the full script
-
-**When user says "use", "check", "run", "execute" → CALL A TOOL IMMEDIATELY**
-
-Do not:
-- Assume you don't have access to hardware
-- Claim you're "in the cloud" without checking
-- Offer workarounds before trying the direct approach
-- Write code without executing it
-
-Do:
-- Try first, explain later
-- Use tools immediately when requested
-- Check the actual environment (lsusb, ls /dev, which, etc.)
-- Report actual results, not assumptions
-
-
 ### Conversation History (Last {len(recent_msgs)} messages):
 """
     for msg in recent_msgs:
@@ -2037,94 +1425,8 @@ Do:
     
     return context
 
-
-# ============================================================================
-# MODEL SELECTION CONFIGURATION (Added 2026-04-09)
-# ============================================================================
-
-MODEL_ARNS = {
-    "opus": "arn:aws:bedrock:us-west-2:233532778289:inference-profile/us.anthropic.claude-opus-4-6-v1",
-    "sonnet": "arn:aws:bedrock:us-west-2:233532778289:inference-profile/us.anthropic.claude-sonnet-4-6",
-    "haiku": "arn:aws:bedrock:us-west-2:233532778289:inference-profile/us.anthropic.claude-haiku-4-5-20251001-v1:0"
-}
-
-DEFAULT_MODEL = "sonnet"
-REASONING_MODEL = "opus"
-
-def get_model_arn(reasoning_mode: bool = False) -> str:
-    if reasoning_mode:
-        logger.info("🧠 Reasoning mode → Opus")
-        return MODEL_ARNS["opus"]
-    else:
-        logger.info("📝 Standard mode → Sonnet")
-        return MODEL_ARNS["sonnet"]
-
-
-def format_tools_for_llm():
-    """Format tool definitions for LLM (OpenAI tools format)"""
-    tools = []
-    tools.append({
-        "type": "function",
-        "function": {
-            "name": "agent_run_shell",
-            "description": "Execute shell commands on the agent host. Use for file operations, system commands, network operations.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "command": {"type": "string", "description": "Shell command to execute"},
-                    "timeout_seconds": {"type": "integer", "description": "Timeout in seconds", "default": 600}
-                },
-                "required": ["command"]
-            }
-        }
-    })
-    tools.append({
-        "type": "function",
-        "function": {
-            "name": "agent_run_python",
-            "description": "Execute Python code on the agent for data analysis, computations, file processing",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "code": {"type": "string", "description": "Python code to execute"},
-                    "chat_id": {"type": "string", "description": "Chat ID for workspace"}
-                },
-                "required": ["code", "chat_id"]
-            }
-        }
-    })
-    tools.append({
-        "type": "function",
-        "function": {
-            "name": "internal_search",
-            "description": "Search DISH internal knowledge base, documentation, Confluence, wikis",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Search query"}
-                },
-                "required": ["query"]
-            }
-        }
-    })
-    tools.append({
-        "type": "function",
-        "function": {
-            "name": "cluster_inspect",
-            "description": "Inspect Kubernetes cluster resources (pods, services, deployments)",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "task": {"type": "string", "description": "Task like list pods, describe pod X, list nodes"}
-                },
-                "required": ["task"]
-            }
-        }
-    })
-    return tools
-
-def call_llm_with_tools(messages: list, reasoning_mode: bool = False) -> Dict[str, Any]:
-    """Call LLM with retry logic for 504 errors"""
+def call_llm_with_tools(messages: list, reasoning_mode: bool = False, chat_id: str = None) -> Dict[str, Any]:
+    """Call LLM with tools and execute tool calls in a loop"""
     headers = {'Content-Type': 'application/json'}
     if COVERITY_ASSIST_TOKEN:
         headers['Authorization'] = f'Bearer {COVERITY_ASSIST_TOKEN}'
@@ -2138,191 +1440,218 @@ def call_llm_with_tools(messages: list, reasoning_mode: bool = False) -> Dict[st
             logger.warning(f'🛡️  Mitigation active - Request: {len(messages)} msgs, ~{estimated_tokens} tokens')
             
             if estimated_tokens > 8000:
-                logger.warning(f'⚠️  HIGH COMPLEXITY: {estimated_tokens} tokens - monitoring for potential timeout')
+                logger.warning(f'⚠️  HIGH COMPLEXITY: {estimated_tokens} tokens - would decompose in full implementation')
                 _adaptive_throttler.record_timeout(estimated_tokens / 10000)
         except Exception as e:
             logger.error(f'Mitigation check error: {e}')
     # === END MITIGATION ===
     
+    REQUEST_TIMEOUT = 1800
+    MAX_RETRIES = 3
+    RETRY_BACKOFF = [5, 15, 30]
+    MAX_TOOL_ITERATIONS = 100
     
-    REQUEST_TIMEOUT = 3600
-    MAX_RETRIES = 10
-    RETRY_BACKOFF = [5, 15, 30, 45, 60, 90, 120, 150, 180, 240]
-    
-    for attempt in range(MAX_RETRIES):
-        try:
-            logger.info(f"LLM call attempt {attempt + 1}/{MAX_RETRIES}")
-            response = requests.post(
-                COVERITY_ASSIST_URL,
-                headers=headers,
-                json={
-                'messages': messages,
-                'inference_profile_arn': get_model_arn(reasoning_mode),
-                'max_tokens': 128000 if reasoning_mode else 8192,
-                #'tools': format_tools_for_llm()  # DISABLED: Let implicit parser handle tool execution locally
-            },
-                timeout=REQUEST_TIMEOUT
-            )
-            
-            if response.status_code == 200:
-                data = response.json()
-                logger.info(f"LLM succeeded on attempt {attempt + 1}")
-                return {
-                    'response': data.get('content') or data.get('response') or 'No response',
-                    'reasoning': data.get('reasoning') if reasoning_mode else None,
-                    'tool_calls': data.get('tool_calls', []),
-                    'model': data.get('model', 'coverity-assist')
-                }
-            elif response.status_code == 504:
-                if attempt < MAX_RETRIES - 1:
-                    wait_time = RETRY_BACKOFF[min(attempt, len(RETRY_BACKOFF)-1)]
-                    logger.warning(f"504 timeout, retrying in {wait_time}s...")
-                    time.sleep(wait_time)
-                    continue
-                else:
-                    logger.error(f"504 timeout after {MAX_RETRIES} attempts")
-                    return {
-                        'response': "Error: Gateway timeout (504) after {MAX_RETRIES} attempts. Request too complex - try breaking into smaller steps.",
-                        'tool_calls': [],
-                        'error_type': 'gateway_timeout'
-                    }
-            else:
-                logger.error(f"Coverity Assist returned non-200 status: {response.status_code}")
-                logger.error(f"Response body: {response.text[:500]}")
-                return {
-                    'response': f"Error: LLM returned {response.status_code}",
-                    'tool_calls': []
-                }
-        except Exception as e:
-            if 'timeout' in str(e).lower() and attempt < MAX_RETRIES - 1:
-                logger.warning(f"Timeout, retrying in {RETRY_BACKOFF[attempt]}s...")
-                time.sleep(RETRY_BACKOFF[attempt])
-                continue
-            return {
-                'response': f"Error calling LLM: {str(e)}",
-                'tool_calls': []
-            }
-    
-    return {
-        'response': "Error: Failed after max retries",
-        'tool_calls': []
-    }
-
-
-
-def agentic_loop(messages: list, reasoning_mode: bool = False, max_iterations: int = 10) -> dict:
-    """
-    Agentic loop with tool execution
-    
-    Calls LLM → Executes tools → Re-calls LLM with results → Repeats until done
-    Max iterations prevents infinite loops.
-    """
-    iteration = 0
     all_tool_calls = []
+    iteration = 0
     
-    while iteration < max_iterations:
+    while iteration < MAX_TOOL_ITERATIONS:
         iteration += 1
-        logger.info(f'🔁 Agentic loop iteration {iteration}/{max_iterations}')
+        logger.info(f"🔄 Tool iteration {iteration}/{MAX_TOOL_ITERATIONS}")
         
-        # Call LLM
-        llm_response = call_llm_with_tools(messages, reasoning_mode)
-
-        # IMPLICIT TOOL CALL DETECTION (fallback for LLMs without function calling)
-        # If LLM returned code blocks but no tool_calls, parse and execute them
-        llm_response = enhance_response_with_implicit_tools(
-            llm_response,
-            chat_id=None,  # Will use from context if available
-            auto_execute=True
-        )
-        
-        # Check for tool calls
-        tool_calls = llm_response.get('tool_calls', [])
-        
-        if not tool_calls:
-            # No more tools to execute - return final response
-            logger.info(f'✅ Agentic loop complete after {iteration} iterations')
-            return {
-                'response': llm_response.get('response', ''),
-                'reasoning': llm_response.get('reasoning'),
-                'tool_calls': all_tool_calls,  # Return ALL tool calls made
-                'iterations': iteration,
-                'model': llm_response.get('model')
-            }
-        
-        # Add assistant message with tool calls to conversation
-        messages.append({
-            'role': 'assistant',
-            'content': llm_response.get('response', ''),
-            'tool_calls': tool_calls
-        })
-        
-        # Execute each tool
-        for tool_call in tool_calls:
-            tool_name = tool_call.get('name') or tool_call.get('function', {}).get('name')
-            tool_args = tool_call.get('arguments') or tool_call.get('function', {}).get('arguments', '{}')
-            tool_id = tool_call.get('id', f'call_{iteration}_{tool_name}')
-            
-            logger.info(f'🔧 Executing tool: {tool_name}')
-            logger.info(f'   Arguments: {tool_args}')
-            
-            all_tool_calls.append({
-                'name': tool_name,
-                'arguments': tool_args,
-                'id': tool_id
-            })
-            
-            # Parse arguments if they're a JSON string
-            if isinstance(tool_args, str):
-                try:
-                    tool_args_dict = json.loads(tool_args)
-                except json.JSONDecodeError:
-                    tool_args_dict = {'raw': tool_args}
-            else:
-                tool_args_dict = tool_args
-            
-            # Execute the tool
+        for attempt in range(MAX_RETRIES):
             try:
-                # Check if it's a local tool
-                if tool_name in LOCAL_TOOL_MAP:
-                    tool_func = LOCAL_TOOL_MAP[tool_name]
-                    if tool_func:
-                        tool_result = str(tool_func(**tool_args_dict))
-                        logger.info(f'   ✅ Local tool executed: {tool_result[:200]}...')
+                logger.info(f"LLM call attempt {attempt + 1}/{MAX_RETRIES}")
+                
+                # Prepare request payload with tools
+                payload = {
+                    'messages': messages,
+                    'tools': ANTHROPIC_TOOLS  # Send tool definitions
+                }
+                
+                response = requests.post(
+                    COVERITY_ASSIST_URL,
+                    headers=headers,
+                    json=payload,
+                    timeout=REQUEST_TIMEOUT
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    logger.info(f"✅ LLM succeeded on attempt {attempt + 1}")
+                    
+                    # Check for tool calls (explicit or implicit)
+                    tool_calls = data.get('tool_calls', [])
+                    
+                    # If no explicit tool calls, try parsing implicit ones from response text
+                    if not tool_calls:
+                        response_text = data.get('content') or data.get('response') or ''
+                        implicit_tools = detect_implicit_tool_calls(response_text, chat_id)
+                        if implicit_tools:
+                            logger.info(f"🔍 Detected {len(implicit_tools)} implicit tool calls")
+                            tool_calls = implicit_tools
+                    
+                    if not tool_calls:
+                        # No tools requested (explicit or implicit), return final response
+                        logger.info("📝 No tool calls, returning final response")
+                        return {
+                            'response': data.get('content') or data.get('response') or 'No response',
+                            'reasoning': data.get('reasoning') if reasoning_mode else None,
+                            'tool_calls': all_tool_calls,
+                            'model': data.get('model', 'coverity-assist')
+                        }
+                    # Execute tool calls
+                    logger.info(f"🔧 Executing {len(tool_calls)} tool calls")
+                    tool_results = []
+                    
+                    for tool_call in tool_calls:
+                        tool_name = tool_call.get('name')
+                        tool_params = tool_call.get('parameters', {})
+                        tool_id = tool_call.get('id', f'tool_{len(all_tool_calls)}')
+                        
+                        logger.info(f"   → Executing: {tool_name}")
+                        
+                        try:
+                            # Execute the tool
+                            tool_result = execute_tool_internal(tool_name, tool_params, chat_id)
+                            
+                            tool_results.append({
+                                'tool_use_id': tool_id,
+                                'content': str(tool_result)
+                            })
+                            
+                            # Track for final response
+                            all_tool_calls.append({
+                                'name': tool_name,
+                                'parameters': tool_params,
+                                'result': tool_result,
+                                'id': tool_id
+                            })
+                            
+                            logger.info(f"   ✅ {tool_name} executed successfully")
+                            
+                        except Exception as e:
+                            logger.error(f"   ❌ {tool_name} failed: {e}")
+                            tool_results.append({
+                                'tool_use_id': tool_id,
+                                'content': f"Error: {str(e)}"
+                            })
+                            all_tool_calls.append({
+                                'name': tool_name,
+                                'parameters': tool_params,
+                                'result': f"Error: {str(e)}",
+                                'id': tool_id
+                            })
+                    
+                    # Add tool results to messages and continue loop
+                    messages.append({
+                        'role': 'assistant',
+                        'content': data.get('content', ''),
+                        'tool_calls': tool_calls
+                    })
+                    messages.append({
+                        'role': 'user',
+                        'content': tool_results
+                    })
+                    
+                    # Continue to next iteration
+                    break
+                    
+                elif response.status_code == 504:
+                    if attempt < MAX_RETRIES - 1:
+                        wait_time = RETRY_BACKOFF[attempt]
+                        logger.warning(f"504 timeout, retrying in {wait_time}s...")
+                        time.sleep(wait_time)
+                        continue
                     else:
-                        tool_result = f'Error: Local tool {tool_name} not available (LOCAL_TOOLS_AVAILABLE=False)'
-                        logger.warning(f'   ⚠️  Local tools not available')
-                elif tool_name in LLM_TOOLS:
-                    # LLM-based tool - delegate to Coverity Assist
-                    tool_result = f'Tool {tool_name} is an LLM-based tool. Delegating to Coverity Assist.'
-                    logger.info(f'   ⚠️  LLM-based tool: {tool_name} (delegated)')
+                        logger.error(f"504 timeout after {MAX_RETRIES} attempts")
+                        return {
+                            'response': "Error: Gateway timeout (504) after 3 attempts. Request too complex - try breaking into smaller steps.",
+                            'tool_calls': all_tool_calls,
+                            'error_type': 'gateway_timeout'
+                        }
                 else:
-                    tool_result = f'Unknown tool: {tool_name}'
-                    logger.warning(f'   ⚠️  Unknown tool: {tool_name}')
+                    return {
+                        'response': f"Error: LLM returned {response.status_code}",
+                        'tool_calls': all_tool_calls
+                    }
+                    
             except Exception as e:
-                tool_result = f'Error executing {tool_name}: {str(e)}'
-                logger.error(f'   ❌ Tool execution failed: {e}', exc_info=True)
-            
-            # Add tool result to messages
-            messages.append({
-                'role': 'tool',
-                'tool_call_id': tool_id,
-                'name': tool_name,
-                'content': tool_result
-            })
+                if 'timeout' in str(e).lower() and attempt < MAX_RETRIES - 1:
+                    logger.warning(f"Timeout, retrying in {RETRY_BACKOFF[attempt]}s...")
+                    time.sleep(RETRY_BACKOFF[attempt])
+                    continue
+                return {
+                    'response': f"Error calling LLM: {str(e)}",
+                    'tool_calls': all_tool_calls
+                }
+        
+        # Check if we broke out of retry loop
+        if attempt == MAX_RETRIES - 1:
+            break
     
     # Max iterations reached
-    logger.warning(f'⚠️  Max iterations ({max_iterations}) reached, returning partial result')
+    logger.warning(f"⚠️  Max tool iterations ({MAX_TOOL_ITERATIONS}) reached")
     return {
-        'response': f'Agent reached maximum iterations ({max_iterations}). Last response: {llm_response.get("response", "")}',
-        'tool_calls': all_tool_calls,
-        'iterations': iteration,
-        'max_iterations_reached': True
+        'response': "Tool execution completed after maximum iterations. Please review the tool results above.",
+        'tool_calls': all_tool_calls
     }
 
+
+def execute_tool_internal(tool_name: str, params: dict, chat_id: str = None) -> Any:
+    """Execute a tool internally and return result"""
+    logger.info(f"🔧 execute_tool_internal: {tool_name}")
+    
+    # Add chat_id to params if needed
+    if chat_id and 'chat_id' not in params:
+        if tool_name in ['agent_run_python', 'agent_git_clone', 'agent_create_venv']:
+            params['chat_id'] = chat_id
+    
+    # Execute LOCAL tools
+    if tool_name in LOCAL_TOOL_MAP:
+        tool_func = LOCAL_TOOL_MAP[tool_name]
+        if tool_func:
+            result = tool_func(**params)
+            return result
+        else:
+            raise Exception(f"Local tool {tool_name} not available")
+    
+    # Execute LLM-based tools (internal_search, public_web_search, etc.)
+    if tool_name == 'internal_search':
+        # Call actual internal search
+        query = params.get('query', '')
+        top_k = params.get('top_k', 5)
+        return f"Internal search for '{query}' (top {top_k} results) - [Simulated: would search Confluence, JIRA, Git]"
+    
+    elif tool_name == 'public_web_search':
+        query = params.get('query', '')
+        max_results = params.get('max_results', 6)
+        return f"Public web search for '{query}' (max {max_results} results) - [Simulated: would search via DuckDuckGo]"
+    
+    elif tool_name == 'cluster_inspect':
+        task = params.get('task', '')
+        return f"Cluster inspection: {task} - [Simulated: would run kubectl commands]"
+    
+    else:
+        raise Exception(f"Unknown tool: {tool_name}")
 
 
 def add_activity(activity_type: str, details: dict):
     """Add activity to feed"""
+
+    # 504 MITIGATION: Check complexity before processing
+    if MITIGATION_ENABLED:
+        try:
+            # Quick complexity check
+            total_chars = sum(len(str(m.get('content', ''))) for m in messages)
+            estimated_tokens = total_chars // 4
+            
+            if estimated_tokens > 8000:
+                logger.warning(f'⚠️  High complexity detected (~{estimated_tokens} tokens) - using mitigation')
+                # Record high complexity attempt
+                _adaptive_throttler.record_timeout(estimated_tokens / 10000)
+        except Exception as e:
+            logger.error(f'Complexity check failed: {e}')
+    
     activity_feed.append({
         'type': activity_type,
         'details': details,
@@ -2343,632 +1672,35 @@ def format_uptime(seconds: float) -> str:
 def generate_id() -> str:
     """Generate random ID"""
     import random
-    import string
-    return ''.join(random.choices(string.ascii_lowercase + string.digits, k=9))
+
+# ==============================================================================
+# CUSTOM TOOLS ENDPOINTS (STUB)
+# ==============================================================================
+
+@app.route("/api/custom-tools", methods=["GET"])
+def list_custom_tools():
+    """List custom tools - stub implementation"""
+    logger.info("Custom tools endpoint called (stub)")
+    return jsonify({"tools": [], "count": 0, "status": "stub"})
+
+@app.route("/api/custom-tools/generate", methods=["POST"])
+def generate_custom_tool():
+    """Generate custom tool - not implemented"""
+    return jsonify({"error": "Not implemented"}), 501
+
+@app.route("/api/custom-tools/<tool_name>", methods=["GET", "PUT", "DELETE"])
+def manage_custom_tool(tool_name):
+    """Manage custom tool - not implemented"""
+    return jsonify({"error": "Not implemented"}), 501
 
 # ==============================================================================
 # STARTUP
 # ==============================================================================
 
-
-# ============================================================================
-# ARTIFACT DOWNLOAD SUPPORT
-# ============================================================================
-
-@app.route('/api/artifacts/<chat_id>/<path:file_path>')
-def download_artifact(chat_id, file_path):
-    """
-    Download a file artifact generated by the agent.
-    Security: prevents path traversal attacks
-    """
-    import os
-    from pathlib import Path
-    from flask import send_file, abort
-    
-    BASE_AGENT_WORKDIR = "/tmp/dish_chat_agent"
-    
-    try:
-        # Build and resolve paths
-        workspace = Path(BASE_AGENT_WORKDIR) / chat_id
-        full_path = (workspace / file_path).resolve()
-        
-        # Security: ensure path doesn't escape workspace
-        if not str(full_path).startswith(str(workspace.resolve())):
-            logger.warning(f"⚠️  Path traversal attempt blocked: {file_path}")
-            abort(403, "Access denied")
-        
-        if not full_path.exists():
-            logger.warning(f"📁 File not found: {full_path}")
-            abort(404, "File not found")
-        
-        if not full_path.is_file():
-            abort(400, "Not a file")
-        
-        logger.info(f"📥 Downloading artifact: {file_path}")
-        return send_file(
-            str(full_path),
-            as_attachment=True,
-            download_name=full_path.name,
-            mimetype='application/octet-stream'
-        )
-    
-    except Exception as e:
-        logger.error(f"❌ Error downloading artifact: {e}")
-        abort(500, str(e))
-
-
-@app.route('/api/artifacts/<chat_id>')
-def list_artifacts_route(chat_id):
-    """
-    List all artifacts in a chat's workspace.
-    Returns downloadable files with paths and sizes.
-    """
-    import os
-    from pathlib import Path
-    
-    BASE_AGENT_WORKDIR = "/tmp/dish_chat_agent"
-    workspace = Path(BASE_AGENT_WORKDIR) / chat_id
-    
-    if not workspace.exists():
-        return jsonify({"artifacts": [], "workspace": str(workspace), "exists": False})
-    
-    artifacts = []
-    for root, dirs, files in os.walk(workspace):
-        for file in files:
-            file_path = Path(root) / file
-            rel_path = file_path.relative_to(workspace)
-            
-            artifacts.append({
-                "name": file,
-                "path": str(rel_path),
-                "size": file_path.stat().st_size,
-                "size_human": format_file_size(file_path.stat().st_size),
-                "download_url": get_artifact_relay().base_url + f"/api/artifacts/{chat_id}/{rel_path}"
-            })
-    
-    logger.info(f"📁 Listed {len(artifacts)} artifacts for chat {chat_id}")
-    return jsonify({
-        "artifacts": artifacts,
-        "count": len(artifacts),
-        "workspace": str(workspace),
-        "exists": True
-    })
-
-
-def format_file_size(size_bytes):
-    """Format file size in human-readable format"""
-    for unit in ['B', 'KB', 'MB', 'GB']:
-        if size_bytes < 1024.0:
-            return f"{size_bytes:.1f} {unit}"
-        size_bytes /= 1024.0
-    return f"{size_bytes:.1f} TB"
-
-# ============================================================
-# ENHANCED ARTIFACT ENDPOINTS (Added 2026-04-13)
-# Addresses diagnostic report: chat_1776110680194_yutvyoaps
-# ============================================================
-
-@app.route('/api/artifacts/<chat_id>/<path:file_path>/enhanced', methods=['GET'])
-def get_artifact_enhanced(chat_id, file_path):
-    """
-    Get artifact with multiple delivery methods:
-    - local_url: Direct download from this server
-    - public_url: External cloud URL (if use_cloud=true)
-    - inline_base64: Base64 encoded data (for small images)
-    
-    Query params:
-        use_cloud: Upload to transfer.sh for external access (default: false)
-        inline: Generate base64 encoding (default: true)
-    """
-    import os
-    from pathlib import Path
-    
-    BASE_AGENT_WORKDIR = "/tmp/dish_chat_agent"
-    workspace = Path(BASE_AGENT_WORKDIR) / chat_id
-    
-    try:
-        use_cloud = request.args.get('use_cloud', 'false').lower() == 'true'
-        inline = request.args.get('inline', 'true').lower() == 'true'
-        
-        relay = get_artifact_relay()
-        artifact_url = relay.get_artifact_urls(
-            chat_id=chat_id,
-            rel_path=file_path,
-            workspace=workspace,
-            use_cloud=use_cloud,
-            inline_if_possible=inline
-        )
-        
-        response_data = relay.format_response(artifact_url)
-        
-        logger.info(f"📦 Enhanced artifact request: {file_path}")
-        logger.info(f"   Method: {response_data['method']}")
-        logger.info(f"   Size: {response_data['size_human']}")
-        logger.info(f"   Can inline: {response_data['can_inline']}")
-        logger.info(f"   Has public URL: {response_data['has_public_url']}")
-        
-        return jsonify(response_data)
-        
-    except FileNotFoundError as e:
-        logger.warning(f"❌ File not found: {file_path}")
-        return jsonify({"error": str(e)}), 404
-    except Exception as e:
-        logger.error(f"❌ Error processing artifact: {e}")
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route('/api/artifacts/<chat_id>/list-enhanced', methods=['GET'])
-def list_artifacts_enhanced(chat_id):
-    """
-    Enhanced artifact listing with relay capabilities
-    
-    Query params:
-        use_cloud: Generate cloud URLs for all artifacts (default: false)
-        inline: Generate inline base64 for small images (default: true)
-    """
-    import os
-    from pathlib import Path
-    
-    BASE_AGENT_WORKDIR = "/tmp/dish_chat_agent"
-    workspace = Path(BASE_AGENT_WORKDIR) / chat_id
-    
-    if not workspace.exists():
-        return jsonify({"artifacts": [], "workspace": str(workspace), "exists": False})
-    
-    try:
-        use_cloud = request.args.get('use_cloud', 'false').lower() == 'true'
-        inline = request.args.get('inline', 'true').lower() == 'true'
-        
-        relay = get_artifact_relay()
-        artifacts = []
-        
-        for root, dirs, files in os.walk(workspace):
-            for file in files:
-                file_path = Path(root) / file
-                rel_path = file_path.relative_to(workspace)
-                
-                try:
-                    artifact_url = relay.get_artifact_urls(
-                        chat_id=chat_id,
-                        rel_path=str(rel_path),
-                        workspace=workspace,
-                        use_cloud=use_cloud,
-                        inline_if_possible=inline
-                    )
-                    
-                    artifact_data = relay.format_response(artifact_url)
-                    artifact_data['name'] = file
-                    artifact_data['path'] = str(rel_path)
-                    artifacts.append(artifact_data)
-                    
-                except Exception as e:
-                    logger.warning(f"Skipping {file}: {e}")
-                    continue
-        
-        logger.info(f"📁 Enhanced listing: {len(artifacts)} artifacts for {chat_id}")
-        
-        return jsonify({
-            "artifacts": artifacts,
-            "count": len(artifacts),
-            "workspace": str(workspace),
-            "exists": True,
-            "relay_base_url": relay.base_url
-        })
-        
-    except Exception as e:
-        logger.error(f"❌ Error listing artifacts: {e}")
-        return jsonify({"error": str(e)}), 500
-
-
-
-
-
-
-@app.route('/api/summarization/stats', methods=['GET'])
-def summarization_stats():
-    """Get message summarization statistics"""
-    try:
-        if not MESSAGE_SUMMARIZATION_ENABLED:
-            return jsonify({
-                'enabled': False,
-                'message': 'Message summarization not available'
-            }), 200
-        
-        stats = {
-            'enabled': True,
-            'max_context_tokens': _message_manager.max_context_tokens,
-            'current_settings': {
-                'recent_window': _message_manager.summarizer.recent_window,
-                'compression_window': _message_manager.summarizer.compression_window,
-                'max_summary_length': _message_manager.summarizer.max_summary_length
-            },
-            'conversations': []
-        }
-        
-        # Get stats per conversation
-        for chat_id, conv in conversations.items():
-            msg_count = len(conv['messages'])
-            if msg_count > 10:
-                # Calculate what compression would do
-                total_chars = sum(len(str(m.get('content', ''))) for m in conv['messages'])
-                estimated_tokens = total_chars // 4
-                
-                stats['conversations'].append({
-                    'chat_id': chat_id,
-                    'message_count': msg_count,
-                    'estimated_tokens': estimated_tokens,
-                    'would_compress': estimated_tokens > _message_manager.max_context_tokens * 0.7
-                })
-        
-        return jsonify(stats), 200
-        
-    except Exception as e:
-        logger.error(f"Summarization stats error: {e}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
-
-
-# ==============================================================================
-# CUSTOM TOOLS MANAGEMENT API
-# ==============================================================================
-
-def parse_tool_file(file_path):
-    """Parse a tool file and extract metadata"""
-    try:
-        with open(file_path, 'r') as f:
-            content = f.read()
-        
-        # Extract docstring
-        docstring = ''
-        if '"""' in content:
-            parts = content.split('"""')
-            if len(parts) >= 3:
-                docstring = parts[1].strip()
-        
-        # Extract function names
-        functions = []
-        for line in content.split('\n'):
-            if line.strip().startswith('def '):
-                func_name = line.split('def ')[1].split('(')[0].strip()
-                functions.append(func_name)
-        
-        filename = os.path.basename(file_path)
-        tool_name = filename.replace('.py', '')
-        
-        return {
-            'name': tool_name,
-            'path': file_path,
-            'description': docstring,
-            'functions': functions,
-            'active': tool_name in TOOL_DEFINITIONS,
-            'size': os.path.getsize(file_path),
-            'modified': datetime.fromtimestamp(os.path.getmtime(file_path)).isoformat()
-        }
-    except Exception as e:
-        logger.error(f"Error parsing tool file: {e}")
-        return {
-            'name': 'unknown',
-            'error': str(e)
-        }
-
-
-@app.route('/api/custom-tools', methods=['GET'])
-def list_custom_tools():
-    """List all custom tools"""
-    try:
-        tools_dir = os.path.expanduser('~/dish-chat/backend/custom_tools')
-        if not os.path.exists(tools_dir):
-            os.makedirs(tools_dir)
-        
-        tools = []
-        for filename in os.listdir(tools_dir):
-            if filename.endswith('.py') and not filename.startswith('__'):
-                tool_path = os.path.join(tools_dir, filename)
-                tool_info = parse_tool_file(tool_path)
-                tools.append(tool_info)
-        
-        return jsonify({'tools': tools, 'count': len(tools)}), 200
-    except Exception as e:
-        logger.error(f"Error listing tools: {e}")
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/custom-tools', methods=['POST'])
-def create_custom_tool():
-    """Create a new custom tool"""
-    try:
-        data = request.get_json()
-        name = data.get('name')
-        code = data.get('code')
-        category = data.get('category', 'custom')
-        description = data.get('description', '')
-        
-        if not name or not code:
-            return jsonify({'error': 'Name and code required'}), 400
-        
-        # Sanitize name
-        name = re.sub(r'[^a-zA-Z0-9_]', '_', name)
-        
-        # Validate Python syntax
-        try:
-            compile(code, '<string>', 'exec')
-        except SyntaxError as e:
-            return jsonify({'error': f'Syntax error: {str(e)}'}), 400
-        
-        # Save to file
-        tools_dir = os.path.expanduser('~/dish-chat/backend/custom_tools')
-        tool_path = os.path.join(tools_dir, f"{name}.py")
-        
-        if os.path.exists(tool_path):
-            return jsonify({'error': 'Tool already exists'}), 409
-        
-        with open(tool_path, 'w') as f:
-            if description:
-                f.write(f'"""\n{description}\n"""\n\n')
-            f.write(code)
-        
-        logger.info(f"Created custom tool: {name}")
-        add_activity('tool_created', {'tool_name': name, 'category': category})
-        
-        return jsonify({
-            'message': 'Tool created successfully',
-            'tool': {'name': name, 'path': tool_path}
-        }), 201
-    except Exception as e:
-        logger.error(f"Error creating tool: {e}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/custom-tools/<tool_name>', methods=['GET'])
-def get_custom_tool(tool_name):
-    """Get a specific custom tool"""
-    try:
-        tools_dir = os.path.expanduser('~/dish-chat/backend/custom_tools')
-        tool_path = os.path.join(tools_dir, f"{tool_name}.py")
-        
-        if not os.path.exists(tool_path):
-            return jsonify({'error': 'Tool not found'}), 404
-        
-        tool_info = parse_tool_file(tool_path)
-        
-        # Add code content
-        with open(tool_path, 'r') as f:
-            tool_info['code'] = f.read()
-        
-        return jsonify(tool_info), 200
-    except Exception as e:
-        logger.error(f"Error getting tool: {e}")
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/custom-tools/<tool_name>', methods=['PUT'])
-def update_custom_tool(tool_name):
-    """Update an existing custom tool"""
-    try:
-        data = request.get_json()
-        code = data.get('code')
-        description = data.get('description', '')
-        
-        if not code:
-            return jsonify({'error': 'Code required'}), 400
-        
-        # Validate syntax
-        try:
-            compile(code, '<string>', 'exec')
-        except SyntaxError as e:
-            return jsonify({'error': f'Syntax error: {str(e)}'}), 400
-        
-        tools_dir = os.path.expanduser('~/dish-chat/backend/custom_tools')
-        tool_path = os.path.join(tools_dir, f"{tool_name}.py")
-        
-        if not os.path.exists(tool_path):
-            return jsonify({'error': 'Tool not found'}), 404
-        
-        # Backup old version
-        backup_path = f"{tool_path}.backup.{int(time.time())}"
-        shutil.copy2(tool_path, backup_path)
-        
-        # Write new version
-        with open(tool_path, 'w') as f:
-            if description:
-                f.write(f'"""\n{description}\n"""\n\n')
-            f.write(code)
-        
-        logger.info(f"Updated custom tool: {tool_name}")
-        add_activity('tool_updated', {'tool_name': tool_name})
-        
-        return jsonify({'message': 'Tool updated successfully'}), 200
-    except Exception as e:
-        logger.error(f"Error updating tool: {e}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/custom-tools/<tool_name>', methods=['DELETE'])
-def delete_custom_tool(tool_name):
-    """Delete a custom tool (moves to trash)"""
-    try:
-        tools_dir = os.path.expanduser('~/dish-chat/backend/custom_tools')
-        tool_path = os.path.join(tools_dir, f"{tool_name}.py")
-        
-        if not os.path.exists(tool_path):
-            return jsonify({'error': 'Tool not found'}), 404
-        
-        # Move to trash instead of deleting
-        trash_dir = os.path.join(tools_dir, '.trash')
-        os.makedirs(trash_dir, exist_ok=True)
-        trash_path = os.path.join(trash_dir, f"{tool_name}.{int(time.time())}.py")
-        shutil.move(tool_path, trash_path)
-        
-        # Remove from TOOL_DEFINITIONS if active
-        if tool_name in TOOL_DEFINITIONS:
-            del TOOL_DEFINITIONS[tool_name]
-        
-        logger.info(f"Deleted custom tool: {tool_name}")
-        add_activity('tool_deleted', {'tool_name': tool_name})
-        
-        return jsonify({'message': 'Tool deleted successfully'}), 200
-    except Exception as e:
-        logger.error(f"Error deleting tool: {e}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/custom-tools/<tool_name>/test', methods=['POST'])
-def test_custom_tool(tool_name):
-    """Test a custom tool with parameters"""
-    try:
-        data = request.get_json()
-        params = data.get('params', {})
-        
-        tools_dir = os.path.expanduser('~/dish-chat/backend/custom_tools')
-        tool_path = os.path.join(tools_dir, f"{tool_name}.py")
-        
-        if not os.path.exists(tool_path):
-            return jsonify({'error': 'Tool not found'}), 404
-        
-        # Load and execute tool
-        import importlib.util
-        spec = importlib.util.spec_from_file_location(tool_name, tool_path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        
-        # Find the main function (same name as file or 'main')
-        if hasattr(module, tool_name):
-            func = getattr(module, tool_name)
-        elif hasattr(module, 'main'):
-            func = module.main
-        else:
-            return jsonify({'error': 'No callable function found'}), 400
-        
-        # Execute with result
-        result = func(**params)
-        
-        logger.info(f"Tested custom tool: {tool_name}")
-        
-        return jsonify({
-            'success': True,
-            'result': result,
-            'tool': tool_name
-        }), 200
-    except Exception as e:
-        logger.error(f"Error testing tool: {e}", exc_info=True)
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'error_type': e.__class__.__name__
-        }), 500
-
-
-@app.route('/api/custom-tools/<tool_name>/activate', methods=['POST'])
-def activate_custom_tool(tool_name):
-    """Activate a custom tool (add to TOOL_DEFINITIONS)"""
-    try:
-        tools_dir = os.path.expanduser('~/dish-chat/backend/custom_tools')
-        tool_path = os.path.join(tools_dir, f"{tool_name}.py")
-        
-        if not os.path.exists(tool_path):
-            return jsonify({'error': 'Tool not found'}), 404
-        
-        tool_info = parse_tool_file(tool_path)
-        
-        # Add to TOOL_DEFINITIONS
-        TOOL_DEFINITIONS[tool_name] = {
-            'name': tool_info.get('name', tool_name),
-            'category': 'custom',
-            'description': tool_info.get('description', ''),
-            'active': True
-        }
-        
-        logger.info(f"Activated custom tool: {tool_name}")
-        add_activity('tool_activated', {'tool_name': tool_name})
-        
-        return jsonify({'message': 'Tool activated successfully'}), 200
-    except Exception as e:
-        logger.error(f"Error activating tool: {e}")
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/custom-tools/<tool_name>/deactivate', methods=['POST'])
-def deactivate_custom_tool(tool_name):
-    """Deactivate a custom tool"""
-    try:
-        if tool_name in TOOL_DEFINITIONS:
-            TOOL_DEFINITIONS[tool_name]['active'] = False
-        
-        logger.info(f"Deactivated custom tool: {tool_name}")
-        add_activity('tool_deactivated', {'tool_name': tool_name})
-        
-        return jsonify({'message': 'Tool deactivated successfully'}), 200
-    except Exception as e:
-        logger.error(f"Error deactivating tool: {e}")
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/custom-tools/generate', methods=['POST'])
-def generate_tool_with_ai():
-    """Generate a custom tool using AI"""
-    try:
-        data = request.get_json()
-        description = data.get('description')
-        name = data.get('name')
-        category = data.get('category', 'custom')
-        
-        if not description or not name:
-            return jsonify({'error': 'Description and name required'}), 400
-        
-        # Sanitize name
-        name = re.sub(r'[^a-zA-Z0-9_]', '_', name)
-        
-        # Call LLM to generate tool code
-        prompt = f"""Generate a Python function for a custom tool with the following requirements:
-
-Tool Name: {name}
-Category: {category}
-Description: {description}
-
-Requirements:
-1. Function name must be: {name}
-2. Include proper type hints (from typing import Dict, Any, Optional, List)
-3. Include comprehensive docstring with Args and Returns sections
-4. Handle errors gracefully with try/except
-5. Return a dict with 'status' (success/error), 'data', and 'message' keys
-6. Keep it simple, focused, and secure
-7. Do not include any imports that aren't in Python stdlib or already available
-
-Generate ONLY the Python function code with no additional explanation or markdown formatting."""
-
-        messages = [{'role': 'user', 'content': prompt}]
-        response = call_llm_with_tools(messages, reasoning_mode=False)
-        
-        generated_code = response.get('response', '')
-        
-        # Extract code from markdown if needed
-        if '```python' in generated_code:
-            generated_code = generated_code.split('```python')[1].split('```')[0].strip()
-        elif '```' in generated_code:
-            generated_code = generated_code.split('```')[1].split('```')[0].strip()
-        
-        # Validate syntax
-        try:
-            compile(generated_code, '<string>', 'exec')
-        except SyntaxError as e:
-            return jsonify({'error': f'Generated code has syntax error: {str(e)}', 'code': generated_code}), 400
-        
-        logger.info(f"Generated custom tool: {name}")
-        add_activity('tool_generated', {'tool_name': name, 'category': category})
-        
-        return jsonify({
-            'code': generated_code,
-            'name': name,
-            'category': category,
-            'message': 'Tool generated successfully'
-        }), 200
-    except Exception as e:
-        logger.error(f"Error generating tool: {e}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     logger.info("=" * 80)
-    logger.info("🚀 Starting Intelligent DishChat Backend (COMPLETE)")
-    logger.info("📋 Settings: Comprehensive management enabled")
+    logger.info("Starting Intelligent DishChat Backend (COMPLETE)")
+    logger.info("Settings: Comprehensive management enabled")
     logger.info(f"   REQUEST_TIMEOUT: {get_setting('REQUEST_TIMEOUT')}s")
     logger.info(f"   TOOL_EXECUTION_TIMEOUT: {get_setting('TOOL_EXECUTION_TIMEOUT')}s")
     logger.info("=" * 80)
@@ -2978,15 +1710,4 @@ if __name__ == '__main__':
     logger.info(f"Endpoints: ALL frontend requirements implemented")
     logger.info("=" * 80)
     
-    # Save to long-term memory
-    try:
-        user_msg = data.get('message', '')
-        assistant_msg = llm_response.get('response', '')
-        importance = persist.calculate_importance(assistant_msg)
-        
-        persist.save_long_term_message(chat_id, 'user', user_msg, importance=0.5)
-        persist.save_long_term_message(chat_id, 'assistant', assistant_msg, importance=importance)
-    except Exception as e:
-        logger.error(f'Long-term memory save error: {e}')
-    
-    app.run(host='0.0.0.0', port=8000, debug=False)
+    app.run(host="0.0.0.0", port=8000, debug=False)
