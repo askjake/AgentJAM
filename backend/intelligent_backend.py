@@ -1506,7 +1506,17 @@ def call_llm_with_tools(messages: list, reasoning_mode: bool = False, chat_id: s
                     
                     for tool_call in tool_calls:
                         tool_name = tool_call.get('name')
-                        tool_params = tool_call.get('parameters', {})
+                        
+                        # Handle both parameter formats
+                        if 'parameters' in tool_call:
+                            tool_params = tool_call['parameters']
+                        elif 'function' in tool_call and 'arguments' in tool_call['function']:
+                            # Parse JSON string from implicit_tool_parser
+                            args_json = tool_call['function']['arguments']
+                            tool_params = json.loads(args_json) if isinstance(args_json, str) else args_json
+                        else:
+                            tool_params = {}
+                        
                         tool_id = tool_call.get('id', f'tool_{len(all_tool_calls)}')
                         
                         logger.info(f"   → Executing: {tool_name}")

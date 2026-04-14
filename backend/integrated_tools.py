@@ -68,7 +68,18 @@ def cluster_inspect_sync(task: str) -> str:
     except subprocess.TimeoutExpired:
         return "❌ Command timed out (30s)"
     except FileNotFoundError:
-        return "❌ kubectl not found - cluster tools unavailable"
+        return """❌ kubectl not found on this system
+
+This AgentPi003 node does not have kubectl installed.
+
+To enable cluster inspection:
+1. Install kubectl: sudo apt-get install kubectl
+2. Configure kubeconfig: kubectl config view
+3. Or use agent_run_shell with ssh to a node that has kubectl
+
+Alternative: Use shell_execution to SSH to ops host:
+  ssh ops-host 'kubectl get namespaces'
+"""
     except Exception as e:
         return f"❌ Error: {str(e)}"
 
