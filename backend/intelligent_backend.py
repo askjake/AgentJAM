@@ -1327,7 +1327,7 @@ def chat_stream():
                         'reasoning_mode': reasoning_mode,
                         'inference_profile_arn': get_model_arn(reasoning_mode),
                         'max_tokens': 128000 if reasoning_mode else 8192,
-                        'tools': format_tools_for_llm()
+                        #'tools': format_tools_for_llm()  # DISABLED: Let implicit parser handle tool execution locally
                     },
                     stream=True,
                     timeout=3600
@@ -2159,7 +2159,7 @@ def call_llm_with_tools(messages: list, reasoning_mode: bool = False) -> Dict[st
                 'messages': messages,
                 'inference_profile_arn': get_model_arn(reasoning_mode),
                 'max_tokens': 128000 if reasoning_mode else 8192,
-                'tools': format_tools_for_llm()
+                #'tools': format_tools_for_llm()  # DISABLED: Let implicit parser handle tool execution locally
             },
                 timeout=REQUEST_TIMEOUT
             )
