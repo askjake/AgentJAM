@@ -38,6 +38,35 @@ def detect_implicit_tool_calls(response_text: str, chat_id: str = None) -> List[
         return []
     
     tool_calls = []
+
+    # First, detect Coverity Assist XML-style tool calls
+    # Pattern: <tool_call>{"name": "agent_run_shell", "arguments": {"command": "..."}}</tool_call>
+    xml_tool_pattern = r'<tool_call>\s*(\{[^}]+\})\s*</tool_call>'
+    
+    for match in re.finditer(xml_tool_pattern, response_text, re.DOTALL):
+        try:
+            tool_data = json.loads(match.group(1))
+            tool_name = tool_data.get('name', '')
+            tool_args = tool_data.get('arguments', {})
+            
+            if tool_name:
+                tool_calls.append({
+                    'id': f'xml_tool_{len(tool_calls)}',
+                    'name': tool_name,
+                    'function': {
+                        'name': tool_name,
+                        'arguments': json.dumps(tool_args)
+                    },
+                    'arguments': tool_args,
+                    'implicit': True,
+                    'source': 'xml_parser'
+                })
+                
+                logger.info(f"📝 Detected XML tool call: {tool_name}")
+        except Exception as e:
+            logger.warning(f"Failed to parse XML tool call: {e}")
+    
+
     
     # Pattern for shell commands
     shell_patterns = [
